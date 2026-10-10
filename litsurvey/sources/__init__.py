@@ -11,7 +11,9 @@ SOURCES = {
     "openalex": (openalex.search, 1.0),
     "s2": (semanticscholar.search, 1.0),
     "arxiv": (arxiv.search, 1.0),
-    "pubmed": (pubmed.search, 1.0),       # the authority for the life sciences
+    # half weight like the other single-field sources: for an engineering query,
+    # PubMed's own top hits are often biomedical papers with no citations
+    "pubmed": (pubmed.search, 0.5),
     "techrxiv": (crossref.portal("techrxiv"), 0.5),
     "researchsquare": (crossref.portal("researchsquare"), 0.5),
     "iacr": (iacr.search, 0.5),

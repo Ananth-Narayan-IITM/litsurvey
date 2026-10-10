@@ -25,6 +25,8 @@ HOST_INTERVAL = {
     "www.ebi.ac.uk": 0.2,
 }
 _last_call = {}
+_host_locks = {}
+_locks_guard = threading.Lock()
 DEBUG = False
 
 FRIENDLY = {
@@ -67,11 +69,24 @@ def _report(kind, text):
 
 
 def _throttle(host):
-    """Space requests per host, both within this process and across processes
-    (CLI and web page running together) via a timestamp file's mtime."""
+    """Space requests per host within this process, and, on a best-effort basis,
+    across processes (CLI and web page running together) via a timestamp file's
+    mtime: two processes that check the file at the same instant can still both
+    proceed, since a plain file gives no atomic reservation.
+
+    One lock per host: without it, several web jobs running in threads read the
+    same last-call time, all decide no wait is needed, and fire together above
+    the provider's limit. Other hosts are not held up."""
     interval = HOST_INTERVAL.get(host, 0.0)
     if not interval:
         return
+    with _locks_guard:
+        lock = _host_locks.setdefault(host, threading.Lock())
+    with lock:
+        _throttle_locked(host, interval)
+
+
+def _throttle_locked(host, interval):
     stamp = os.path.join(DATA_DIR, ".ratelimit-" + host)
     try:
         last_file = os.stat(stamp).st_mtime

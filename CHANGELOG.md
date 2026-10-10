@@ -6,6 +6,76 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-10
+
+Most of these were found by Anant Goyal in the same review as the 1.1.1
+security fixes.
+
+### Fixed
+- **arXiv returned almost nothing for multi-word queries.** The whole query was
+  sent as one exact phrase, so "deep learning inverse scattering" found 0
+  papers. Every word is now required in any field (stop words such as "of"
+  are dropped, since arXiv does not index them and they would empty the
+  result). Three test queries went from 1, 0 and 0 arXiv papers to 20 each.
+- Duplicates in merged results. A record now matches another when its DOI,
+  arXiv id or title agrees, so: every version of a TechRxiv or Research
+  Square preprint is one paper (they register a DOI per version; one search
+  had listed the same preprint 8 times); an arXiv DOI meets the same arXiv
+  id; a preprint meets its journal version under the same long title. A
+  matching title never joins records whose journal DOIs (or arXiv ids)
+  disagree. On four real queries this removed every repeated title and year
+  (5, 10, 8 and 12 before).
+- Titles in non-Latin scripts were all reduced to the same empty key and
+  merged into one paper; two different papers titled "Editorial" were merged;
+  long titles were compared only on their first 80 characters. Titles are now
+  compared in full, and a short title also needs the same year.
+- Two runs in the same second got the same history id, and the second
+  overwrote the first. Ids now carry a random part, and an id already in use
+  is never reused.
+- BibTeX: `#`, `_`, `$`, `~`, `^` and literal braces in titles, venues,
+  names and abstracts are escaped (an unmatched brace used to break the whole
+  file), and "Martin Luther King Jr." becomes `King, Jr., Martin Luther`
+  (citation key `king…`). Checked by compiling with pdflatex and bibtex.
+- Old-style arXiv ids are accepted without the `ARXIV:` prefix
+  (`hep-th/9901001`).
+- With Ollama, the agent's conversation silently overflowed the default
+  context window, dropping its instructions first. litsurvey now asks for a
+  32k window unless the model's Modelfile already sets a larger one.
+- A reply cut off at the model's length limit (Anthropic `max_tokens`,
+  OpenAI-compatible `length`, Ollama `length`) now ends with a visible note
+  instead of stopping mid-sentence without warning.
+- The search log of a subscription-CLI run picked up any search the user ran
+  by hand at the same time. The agent's own runs are now tagged and only
+  those are listed.
+- Several web jobs running at once could each decide no wait was needed and
+  exceed a source's rate limit together. Rate limiting is now locked per host
+  within one process. Two separate litsurvey processes (say the command line
+  and the web page) are still spaced only on a best-effort basis.
+- Finished web jobs stayed in memory until the server stopped. Jobs that
+  finished more than an hour earlier are now dropped whenever a new job
+  starts (their runs remain in History).
+
+### Changed
+- PubMed carries half weight in the rank fusion, like the other
+  single-field sources: for engineering queries its own top hits were often
+  biomedical papers with no citations.
+- The README now says plainly that a Semantic Scholar key is needed in
+  practice: without one the shared pool often refuses every request.
+
+### Added
+- **Citation check.** The search log now keeps the identifiers of exactly
+  the papers the model was shown, and every `novelty` and `research` report
+  ends with a note listing any DOI or arXiv id (including arXiv abs, pdf and
+  html links) that did not come from a search in that run. References without
+  an identifier are not checked. With a subscription CLI only the agent's own
+  tagged searches count.
+- **"Update available" in the web page.** When PyPI has a newer version, a
+  small link appears to the right of the History tab. The local server asks
+  pypi.org at most once a day; `"update_check": false` in the config (or
+  `LITSURVEY_UPDATE_CHECK=false`) turns this off.
+- The web page's header wraps on narrow screens instead of running off the
+  edge.
+
 ## [1.1.1] - 2026-10-10
 
 ### Security

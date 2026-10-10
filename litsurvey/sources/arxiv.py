@@ -10,10 +10,29 @@ NS = {"a": "http://www.w3.org/2005/Atom"}
 _BLOCK_RE = re.compile(r"<(script|style|math|svg|nav|header)[^>]*>.*?</\1>", re.S | re.I)
 
 
+# Words arXiv's query parser reads as operators when they stand alone
+_OPERATORS = {"and", "or", "not", "andnot"}
+# Stop words are not in arXiv's index, so "all:of" matches nothing and, joined
+# with AND, empties the whole result ("direction of arrival": 0 hits, 94 without)
+_STOP = {"a", "an", "the", "of", "in", "on", "for", "to", "with", "by", "at", "from",
+         "as", "is", "are", "be", "via", "into", "its", "their", "this", "that"}
+
+
+def query_string(query):
+    """arXiv search syntax for a keyword query: every word required, in any field.
+    Quoting the whole query instead makes arXiv look for that exact phrase,
+    which for "deep learning inverse scattering" finds nothing at all."""
+    words = [w for w in re.findall(r"\w[\w\-]*", query or "")
+             if w.lower() not in _OPERATORS and w.lower() not in _STOP]
+    return " AND ".join("all:" + w for w in words)
+
+
 def search(query, limit=20, year_from=None):
-    q = f'all:"{query}"' if " " in query else f"all:{query}"
+    q = query_string(query)
+    if not q:
+        return []
     params = {"search_query": q, "max_results": str(limit), "sortBy": "relevance"}
-    raw = http.get("http://export.arxiv.org/api/query?" + urllib.parse.urlencode(params))
+    raw = http.get("https://export.arxiv.org/api/query?" + urllib.parse.urlencode(params))
     root = ET.fromstring(raw)
     out = []
     for e in root.findall("a:entry", NS):

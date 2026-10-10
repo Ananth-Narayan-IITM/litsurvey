@@ -13,6 +13,7 @@ Keys (all optional):
   cli_command       custom command line for cli_tool=custom; {prompt} placeholder or prompt on stdin
   cli_model         model the subscription CLI should use; "-" means the tool's own default
   cli_effort        reasoning effort for the subscription CLI; "-" means the tool's own default
+  update_check      "false" stops the web page asking pypi.org (once a day) for the latest version
 """
 import json
 import os
@@ -34,6 +35,7 @@ ENV_MAP = {
     "cli_command": ("LITSURVEY_CLI_COMMAND",),
     "cli_model": ("LITSURVEY_CLI_MODEL",),
     "cli_effort": ("LITSURVEY_CLI_EFFORT",),
+    "update_check": ("LITSURVEY_UPDATE_CHECK",),
 }
 
 DEFAULTS = {
@@ -49,6 +51,7 @@ DEFAULTS = {
     "cli_command": "",
     "cli_model": "",
     "cli_effort": "",
+    "update_check": "",
 }
 
 
@@ -133,6 +136,11 @@ def save(values):
     except OSError:
         pass
     return CONFIG_PATH
+
+
+def enabled(value):
+    """A config flag that is on unless set to false / 0 / no / off."""
+    return str(value).strip().lower() not in ("false", "0", "no", "off")
 
 
 CFG = load()

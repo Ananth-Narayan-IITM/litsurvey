@@ -71,6 +71,14 @@ The store is `~/.litsurvey/runs/`; see
   the page and look in History once they finish.
 - To use a different port: `litsurvey web --port 9000`. To start without
   opening a browser: `--no-browser`.
+- **Update available.** When a newer litsurvey is on PyPI, a small orange
+  "Update available" link appears to the right of the History tab; it opens
+  the release notes, and hovering over it shows the upgrade command. To know
+  this, the local server asks pypi.org for the latest version at most once a
+  day and remembers the answer in `~/.litsurvey/.update-check`. Nothing about
+  your searches is sent. To turn it off, set `"update_check": false` in
+  `~/.litsurvey/config.json` or `LITSURVEY_UPDATE_CHECK=false` in the
+  environment.
 - The server is single-user by design. Do not expose it to a network; it has
   no authentication.
 - It answers only the page it served. Requests whose `Host` is not

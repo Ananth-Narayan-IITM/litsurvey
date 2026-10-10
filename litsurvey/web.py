@@ -13,8 +13,69 @@ from . import __version__, backends, config, export, history, http, ops, papers
 
 REPO_URL = "https://github.com/udaykdk/litsurvey"
 
+# "Update available" in the page header. The local server, not the page, asks
+# PyPI, at most once a day; the answer is cached in ~/.litsurvey. PyPI's JSON
+# API can trail a new release by a few minutes, which is harmless here.
+UPDATE_URL = "https://pypi.org/pypi/litsurvey/json"
+UPDATE_EVERY = 24 * 3600
+UPDATE_CACHE = os.path.join(config.DATA_DIR, ".update-check")
+_UPDATE_LOCK = threading.Lock()
+
+
+def version_tuple(v):
+    """(1, 10) from "1.10.0": compared as numbers, so 1.10 is newer than 1.9, and
+    trailing zeros dropped, so "1.2" equals "1.2.0". A pre-release ("1.2.0rc1")
+    or anything unparsable gives None and is ignored."""
+    parts = str(v or "").strip().split(".")
+    if not parts or not all(p.isdigit() for p in parts):
+        return None
+    nums = [int(p) for p in parts]
+    while len(nums) > 1 and nums[-1] == 0:
+        nums.pop()
+    return tuple(nums)
+
+
+_UPDATE_MEMO = {}     # this process's last answer, in case the cache file cannot be written
+
+
+def update_status(now=None):
+    """{"enabled", "latest", "update_available"}. Network only when the cached
+    answer is older than a day; offline or any error just means no marker."""
+    now = now or time.time()
+    if not config.enabled(config.load()["update_check"]):
+        return {"enabled": False, "latest": None, "update_available": False}
+    with _UPDATE_LOCK:
+        try:
+            with open(UPDATE_CACHE, encoding="utf-8") as f:
+                cache = json.load(f)
+            float(cache.get("checked") or 0)           # a damaged file is treated as absent
+            if not isinstance(cache.get("latest") or "", str):
+                raise ValueError
+        except (OSError, ValueError, TypeError, AttributeError):
+            cache = {}
+        if float(_UPDATE_MEMO.get("checked") or 0) > float(cache.get("checked") or 0):
+            cache = dict(_UPDATE_MEMO)
+        if now - float(cache.get("checked") or 0) > UPDATE_EVERY:
+            try:
+                data = json.loads(http.get(UPDATE_URL, timeout=5, retries=1).decode("utf-8"))
+                cache = {"checked": now, "latest": data["info"]["version"]}
+            except Exception:  # noqa: BLE001 - offline, PyPI down: try again tomorrow
+                cache = {"checked": now, "latest": cache.get("latest")}
+            _UPDATE_MEMO.clear()
+            _UPDATE_MEMO.update(cache)
+            try:
+                config.ensure_data_dir()
+                config.write_private(UPDATE_CACHE, json.dumps(cache))
+            except OSError:
+                pass
+    latest, mine = version_tuple(cache.get("latest")), version_tuple(__version__)
+    newer = bool(latest and mine and latest > mine)
+    return {"enabled": True, "latest": cache.get("latest") if newer else None,
+            "update_available": newer}
+
 JOBS = {}
 JOBS_LOCK = threading.Lock()
+JOB_KEEP = 3600       # seconds a finished job stays queryable; its run is in History anyway
 
 
 def _page():
@@ -29,6 +90,9 @@ def _start_job(mode, params):
            "started": time.time(), "result": None, "run_id": None, "error": None,
            "written": [], "current": "", "note": ""}
     with JOBS_LOCK:
+        now = time.time()
+        for old in [k for k, j in JOBS.items() if j.get("finished") and now - j["finished"] > JOB_KEEP]:
+            del JOBS[old]
         JOBS[job_id] = job
 
     def progress(line):
@@ -51,10 +115,12 @@ def _start_job(mode, params):
                 job["result"]["log"] = result["log"]
             job["run_id"], job["written"] = run_id, written
             job["status"] = "done"
+            job["finished"] = time.time()
         except Exception as e:  # noqa: BLE001
             job["error"] = f"{type(e).__name__}: {e}"
             job["progress"].append(traceback.format_exc().splitlines()[-1])
             job["status"] = "error"
+            job["finished"] = time.time()
 
     threading.Thread(target=work, daemon=True).start()
     return job_id
@@ -146,6 +212,8 @@ class Handler(BaseHTTPRequestHandler):
                 info["openai_key"] = bool(cfg["openai_api_key"])
                 info["anthropic_key"] = bool(cfg["anthropic_api_key"])
                 return self._json(info)
+            if parts[:2] == ["api", "update"]:
+                return self._json(update_status())
             if parts[:2] == ["api", "history"]:
                 return self._json(history.list_runs(limit=200))
             if parts[:2] == ["api", "run"] and len(parts) >= 3:
@@ -169,7 +237,7 @@ class Handler(BaseHTTPRequestHandler):
                 job = JOBS.get(parts[2])
                 if not job:
                     return self._json({"error": "no such job"}, 404)
-                return self._json({k: v for k, v in job.items() if k != "started"})
+                return self._json({k: v for k, v in job.items() if k not in ("started", "finished")})
             return self._json({"error": "not found"}, 404)
         except FileNotFoundError:
             return self._json({"error": "not found"}, 404)

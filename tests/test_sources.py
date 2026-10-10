@@ -285,3 +285,10 @@ def test_europepmc_blank_author_entries_fall_back_to_the_author_string():
          "authorList": {"author": [{}, {"fullName": "  "}]},
          "authorString": "Ann Author, Bob Beta"}]}})
     assert out[0]["authors"] == ["Ann Author", "Bob Beta"]
+
+
+def test_arxiv_query_requires_every_word_not_the_exact_phrase():
+    assert arxiv.query_string("direction of arrival estimation") == \
+        "all:direction AND all:arrival AND all:estimation"
+    assert arxiv.query_string("physics-informed NOT (PINN): AND") == "all:physics-informed AND all:PINN"
+    assert arxiv.query_string("the of and") == ""

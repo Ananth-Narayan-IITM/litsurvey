@@ -21,6 +21,14 @@
   header h1 { font-size:20px; margin:0; letter-spacing:.01em; } header .v { color:#f4f8fb; font-size:13px; }
   nav { display:flex; gap:4px; } nav button { background:rgba(10,40,70,.45); border:1px solid rgba(255,255,255,.45); border-radius:6px; font-size:14px; padding:6px 12px; cursor:pointer; color:#fff; text-shadow:none; }
   nav button.on { background:#fff; color:var(--accent); }
+  nav .upd { align-self:center; margin-left:8px; font-size:12px; color:#fff; background:#c2410c; border-radius:999px; padding:3px 10px; text-decoration:none; white-space:nowrap; }
+  nav .upd:hover { background:#9a3412; }
+  @media (max-width: 700px) {   /* phones: let the header wrap instead of running off the edge */
+    header { flex-wrap:wrap; gap:8px; padding:10px 12px; }
+    nav { flex-wrap:wrap; row-gap:6px; }
+    nav .upd { margin-left:0; }
+    header .links { margin-left:0; }
+  }
   header .links { margin-left:auto; display:flex; gap:8px; } header .links a { color:#fff; background:rgba(10,40,70,.45); border:1px solid rgba(255,255,255,.35); border-radius:6px; padding:5px 10px; font-size:13px; text-decoration:none; text-shadow:none; }
   header .links a:hover { background:rgba(0,0,0,.35); }
   .module { border-radius:8px; padding:12px 14px 10px; margin-bottom:10px; border:1px solid transparent; }
@@ -75,7 +83,7 @@
 <body>
 <header>
   <span class="brand"><h1>litsurvey</h1><span class="v">v{{VERSION}} · Scientific Literature Survey</span></span>
-  <nav><button id="tabRun" class="on">Run</button><button id="tabHist">History</button></nav>
+  <nav><button id="tabRun" class="on">Run</button><button id="tabHist">History</button><a id="upd" class="upd" target="_blank" rel="noopener" hidden>Update available</a></nav>
   <span class="links"><a id="docsLink" href="#" target="_blank" rel="noopener">Docs</a><a id="bugLink" href="#" target="_blank" rel="noopener">Report a bug</a></span>
 </header>
 <main>
@@ -389,6 +397,19 @@ function showTab(t){ $("run").classList.toggle("hidden", t!=="run"); $("hist").c
   $("tabRun").classList.toggle("on", t==="run"); $("tabHist").classList.toggle("on", t==="hist"); if (t==="hist") loadHistory(); }
 $("tabRun").addEventListener("click", ()=>showTab("run")); $("tabHist").addEventListener("click", ()=>showTab("hist"));
 loadConfig();
+// After the page is up, so a slow or absent network never delays it.
+async function checkUpdate(){
+  try {
+    const u = await (await fetch("/api/update")).json();
+    if (!u.update_available) return;
+    const a = $("upd");
+    a.href = (CONFIG.repo_url || "https://github.com/udaykdk/litsurvey") + "/releases/latest";
+    a.textContent = `Update available: v${u.latest}`;
+    a.title = `You are running v{{VERSION}}. Upgrade with: pipx upgrade litsurvey  (or: pip install -U litsurvey). Click for the release notes.`;
+    a.hidden = false;
+  } catch(e) {}
+}
+setTimeout(checkUpdate, 300);
 newQuote();
 // ?mode=research&text=... preselects a mode and fills the box (handy for links and screenshots)
 try { const u = new URLSearchParams(location.search); const pm = u.get("mode"); if (pm && LABELS[pm]) { document.querySelector(`input[name=mode][value=${pm}]`).checked = true; refreshForm(); } if (u.get("text")) { $("text").value = u.get("text"); checkUrl(); } } catch(e) {}

@@ -21,11 +21,13 @@ choosing which indexes to query (`--sources`), `--debug`, `init` and
 **LLM-driven (the main draw)**
 
 - `research "question"`: the model breaks the question into sub-questions,
-  runs searches across six scholarly indexes, walks the citation graph of
+  runs searches across seven scholarly indexes, walks the citation graph of
   the central papers, reads one or two arXiv papers in full, and writes a
   survey organised by theme with numbered citations, open problems, and an
-  honest coverage caveat. Every citation comes from a real search result,
-  and the report ends with a log of every query that was run.
+  honest coverage caveat. The model is told to cite only search results,
+  and litsurvey checks every DOI and arXiv id in the report against what the
+  searches returned, flagging any that did not come from them. The report
+  ends with a log of every query that was run.
 - `novelty "claim"`: the same machinery aimed at one claim: closest prior
   work, what is new versus known, a verdict (clearly novel / incremental /
   substantially anticipated / cannot determine) with confidence, and
@@ -71,12 +73,15 @@ It opens `http://127.0.0.1:8765` in your browser, serves only to your own
 machine, and needs no configuration to start searching. The rest of this
 page shows the command-line equivalents.
 
-### The Semantic Scholar key (optional, recommended)
+### The Semantic Scholar key (free, and in practice needed)
 
-Only one of the seven default sources needs a key at all. Semantic Scholar works without
-one too, but on a shared pool that is often rate-limited and at busy times
-refuses every request. A free key gives you a dedicated one request per
-second and makes the citation-graph and recommendation lookups reliable.
+Only one of the seven default sources needs a key at all. Semantic Scholar
+accepts requests without one, but the shared pool for keyless callers is
+often rate-limited, and at busy times it refuses every request, so in
+practice Semantic Scholar contributes little or nothing until you add a key.
+The other six sources still work. A free key gives you a dedicated one
+request per second and makes the citation-graph and recommendation lookups
+reliable.
 
 1. Request it at https://www.semanticscholar.org/product/api (the API key
    request form; name, email and a one-line purpose such as "literature
@@ -153,7 +158,7 @@ sources are queried one after another at the rate limits they ask for;
 |---|---|---|
 | `search`, `paper`, `cites`, `refs`, `related` | no | your query, or a paper id or title, to the scholarly APIs (OpenAlex, Semantic Scholar, arXiv, PubMed/NCBI, Crossref, eprint.iacr.org, and Europe PMC/EBI when asked for) |
 | `oa` | no | one DOI to Unpaywall (a title is first resolved through the search APIs) |
-| `history`, `init`, `doctor`, `web` | no | nothing (`doctor` makes one test query per source; actions on the web page follow the rows above) |
+| `history`, `init`, `doctor`, `web` | no | nothing, except: `doctor` makes one test query per source; `web` asks pypi.org once a day whether a newer litsurvey exists (`update_check: false` turns it off); actions on the web page follow the rows above |
 | `novelty`, `research`, local model (Ollama, or an OpenAI-compatible server on localhost) | yes, local | the keyword queries the model composes and the paper ids it looks up, to the scholarly APIs; your text stays on the machine |
 | `novelty`, `research`, subscription CLI (Claude Code, Codex, Antigravity, Gemini) | yes, vendor cloud | your claim or question and everything the agent reads, to that vendor under your subscription (see the note on model and effort below) |
 | `novelty`, `research`, cloud API key | yes, cloud | your claim or question and every search result, to that provider |

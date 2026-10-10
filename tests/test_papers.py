@@ -1,3 +1,5 @@
+import pytest
+
 from litsurvey import papers as P
 
 
@@ -22,10 +24,12 @@ def test_merge_dedupes_by_doi_and_fuses_sources():
 def test_merge_dedupes_by_arxiv_then_title():
     a = [mk(title="Same Title!", arxiv="2404.19756", sources=["arxiv"])]
     b = [mk(title="same title", arxiv="2404.19756", sources=["s2"])]
-    c = [mk(title="No ids here", sources=["openalex"])]
-    d = [mk(title="no ids HERE", sources=["s2"])]
+    c = [mk(title="No ids here", year=2021, sources=["openalex"])]
+    d = [mk(title="no ids HERE", year=2021, sources=["s2"])]
     assert len(P.merge([a, b])) == 1
     assert len(P.merge([c, d])) == 1
+    # a short title with no id and no year identifies nothing: kept apart
+    assert len(P.merge([[mk(title="Editorial", sources=["a"])], [mk(title="Editorial", sources=["b"])]])) == 2
 
 
 def test_rrf_prefers_papers_ranked_high_in_more_sources():
@@ -119,3 +123,119 @@ def test_http_reporter_receives_current_host_and_retry_notes(monkeypatch):
     assert any(k == "note" and "rate-limiting" in t for k, t in events)
     http.set_reporter(None)
     assert http.friendly("localhost:11434") == "the local model" and http.friendly("x.y") == "x.y"
+
+
+def test_throttle_serialises_threads_per_host(tmp_path, monkeypatch):
+    import threading
+    import time
+    from litsurvey import http as H
+    monkeypatch.setattr(H, "DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(H, "ensure_data_dir", lambda: str(tmp_path))
+    monkeypatch.setitem(H.HOST_INTERVAL, "slow.example", 0.3)
+    monkeypatch.setattr(H, "_last_call", {})
+    stamps = []
+
+    def hit():
+        H._throttle("slow.example")
+        stamps.append(time.monotonic())
+    threads = [threading.Thread(target=hit) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    stamps.sort()
+    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    assert min(gaps) > 0.25          # never two requests inside one interval
+
+
+def M(**kw):
+    kw.setdefault("sources", ["x"])
+    return P.make(**kw)
+
+
+def test_non_latin_titles_are_not_merged_together():
+    out = P.merge([[M(title="深度学习的研究"), M(title="Глубокое обучение")]])
+    assert len(out) == 2
+
+
+def test_short_generic_titles_need_the_same_year():
+    out = P.merge([[M(title="Editorial", year=2019), M(title="Editorial", year=2023)]])
+    assert len(out) == 2
+    assert len(P.merge([[M(title="Editorial", year=2019)], [M(title="Editorial", year=2019)]])) == 1
+
+
+def test_long_titles_merge_across_years():
+    """A preprint (2024) and its journal version (2025) under the same title."""
+    t = "Kolmogorov-Arnold networks for multi-fidelity regression"
+    out = P.merge([[M(title=t, year=2024, arxiv="2410.14764")], [M(title=t, year=2025, doi="10.1088/2632-2153/adf702")]])
+    assert len(out) == 1 and out[0]["doi"] and out[0]["arxiv"]
+
+
+def test_arxiv_doi_meets_arxiv_id():
+    out = P.merge([[M(title="KAN", arxiv="2404.19756v2")], [M(title="KAN: Kolmogorov", doi="10.48550/arXiv.2404.19756")]])
+    assert len(out) == 1
+
+
+@pytest.mark.parametrize("a,b", [
+    ("10.36227/techrxiv.16610629.v7", "10.36227/techrxiv.16610629.v13"),
+    ("10.36227/techrxiv.16610629", "10.36227/techrxiv.16610629.v1"),
+    ("10.36227/techrxiv.176704133.32328897/v1", "10.36227/techrxiv.176704133.32328897/v2"),
+    ("10.21203/rs.3.rs-4504342/v1", "10.21203/rs.3.rs-4504342/v4")])
+def test_preprint_versions_merge(a, b):
+    assert len(P.merge([[M(title="Version one", doi=a)], [M(title="Version two, renamed", doi=b)]])) == 1
+
+
+def test_journal_dois_with_v_are_left_alone():
+    out = P.merge([[M(title="A", doi="10.1000/abc.v1")], [M(title="B", doi="10.1000/abc.v2")]])
+    assert len(out) == 2
+
+
+def test_a_record_matching_two_papers_joins_them():
+    t = "A sufficiently long and specific paper title for matching"
+    out = P.merge([[M(title=t, year=2020), M(title="Other", doi="10.5555/x")],
+                        [M(title=t, year=2020, doi="10.5555/x")]])
+    assert len(out) == 1 and out[0]["doi"] == "10.5555/x"
+
+
+def test_old_style_arxiv_ids_without_prefix():
+    assert P.is_paper_id("hep-th/9901001") and P.is_paper_id("math.GT/0309136v2")
+    assert P.canonical_id("hep-th/9901001v2") == "ARXIV:hep-th/9901001"
+
+
+def test_run_ids_are_unique_within_a_second():
+    from litsurvey import history
+    ids = {history.new_id("search") for _ in range(200)}
+    assert len(ids) > 190 and all(history.RUN_ID.match(i) for i in ids)
+
+
+def test_same_title_different_dois_stay_apart():
+    out = P.merge([[M(title="Editorial", year=2020, doi="10.1000/ed.1", authors=["A"])],
+                   [M(title="Editorial", year=2020, doi="10.2000/ed.2", authors=["B"])]])
+    assert len(out) == 2 and {p["doi"] for p in out} == {"10.1000/ed.1", "10.2000/ed.2"}
+
+
+def test_long_titles_compare_in_full():
+    stem = "A very long and detailed study of adaptive collocation in physics informed neural networks, part "
+    out = P.merge([[M(title=stem + "one", year=2020)], [M(title=stem + "two", year=2020)]])
+    assert len(out) == 2
+
+
+def test_bridging_keeps_the_title():
+    t = "Kolmogorov Arnold networks for operator learning in practice"
+    out = P.merge([[M(title=t, arxiv="2501.00001")], [M(title="", doi="10.5555/k")],
+                   [M(title="", doi="10.5555/k", arxiv="2501.00001")]])
+    assert len(out) == 1 and out[0]["title"] == t
+
+
+def test_a_year_learnt_while_merging_is_matched_again():
+    out = P.merge([[M(title="KAN", year=2024, sources=["a"])],
+                   [M(title="KAN", doi="10.5555/kan", sources=["b"])],
+                   [M(title="KAN", year=2024, doi="10.5555/kan", sources=["c"])]])
+    assert len(out) == 1
+
+
+def test_preprint_and_journal_doi_with_the_same_title_merge():
+    t = "Core temperature estimation of lithium-ion batteries using learned models"
+    out = P.merge([[M(title=t, year=2025, doi="10.1109/TTE.2025.3559633")],
+                   [M(title=t, year=2024, doi="10.36227/techrxiv.172468367.74530953/v1")]])
+    assert len(out) == 1

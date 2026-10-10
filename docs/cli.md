@@ -34,9 +34,14 @@ litsurvey search "QUERY" [--year-from YEAR] [--sources openalex,s2,arxiv] [--sch
 
 Queries OpenAlex, Semantic Scholar, arXiv, PubMed, TechRxiv, Research Square
 and the IACR ePrint archive, de-duplicates by DOI, arXiv ID or title, and
-merges the rankings with weighted reciprocal rank fusion (the big indexes
-carry full weight, the single-portal sources half). A paper found by more
-than one source ranks higher and shows `[openalex+s2]`. `--scholar` prints
+merges the rankings with weighted reciprocal rank fusion (OpenAlex, Semantic
+Scholar and arXiv carry full weight; PubMed and the single-portal sources
+half, so a field-specific index does not crowd a general query). Records are
+the same paper when their DOIs agree (preprint version suffixes such as
+TechRxiv's `.v7` are ignored), their arXiv ids agree (an arXiv DOI such as
+`10.48550/arXiv.2404.19756` counts as its arXiv id), or their titles agree;
+a short title such as "Editorial" must also have the same year. A paper
+found by more than one source ranks higher and shows `[openalex+s2]`. `--scholar` prints
 a Google Scholar URL for the same query, for a manual comparison.
 
 `--sources` restricts or extends the set:

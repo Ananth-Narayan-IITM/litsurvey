@@ -243,3 +243,92 @@ def test_port_80_accepts_the_portless_host():
     assert "127.0.0.1" in h._local_names() and "localhost:80" in h._local_names()
     h.server = type("S", (), {"server_address": ("127.0.0.1", 8765)})()
     assert "127.0.0.1" not in h._local_names()
+
+
+def test_finished_jobs_are_dropped_after_an_hour(monkeypatch):
+    import time as T
+    monkeypatch.setattr(web, "JOBS", {"old": {"status": "done", "finished": T.time() - 7200},
+                                      "recent": {"status": "done", "finished": T.time() - 60},
+                                      "running": {"status": "running"}})
+    monkeypatch.setattr(web.ops, "run_mode", lambda *a, **k: {"papers": []})
+    monkeypatch.setattr(web.ops, "save", lambda *a, **k: ("rid", []))
+    web._start_job("search", {"text": "x"})
+    assert "old" not in web.JOBS and "recent" in web.JOBS and "running" in web.JOBS
+
+
+def test_versions_compare_as_numbers():
+    assert web.version_tuple("1.10.0") > web.version_tuple("1.9.0")
+    assert web.version_tuple("1.2.0rc1") is None and web.version_tuple("") is None
+
+
+@pytest.fixture
+def update_env(monkeypatch, tmp_path):
+    monkeypatch.setattr(web, "UPDATE_CACHE", str(tmp_path / ".update-check"))
+    monkeypatch.setattr(web, "_UPDATE_MEMO", {})
+    monkeypatch.setattr(web.config, "ensure_data_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(web, "__version__", "1.1.1")
+    monkeypatch.delenv("LITSURVEY_UPDATE_CHECK", raising=False)
+    calls = []
+
+    def fake_get(url, timeout=30, retries=5, headers=None):
+        calls.append(url)
+        return json.dumps({"info": {"version": "1.2.0"}}).encode()
+    monkeypatch.setattr(web.http, "get", fake_get)
+    return calls
+
+
+def test_update_is_reported_and_pypi_asked_once_a_day(update_env):
+    s = web.update_status(now=1_000_000)
+    assert s == {"enabled": True, "latest": "1.2.0", "update_available": True}
+    web.update_status(now=1_000_000 + 3600)              # an hour later: from the cache
+    assert len(update_env) == 1
+    web.update_status(now=1_000_000 + 25 * 3600)         # next day: asks again
+    assert len(update_env) == 2
+
+
+def test_no_marker_when_current_or_offline(update_env, monkeypatch):
+    monkeypatch.setattr(web, "__version__", "1.2.0")
+    assert web.update_status(now=1_000_000)["update_available"] is False
+
+    def offline(*a, **k):
+        raise OSError("no network")
+    monkeypatch.setattr(web.http, "get", offline)
+    monkeypatch.setattr(web, "__version__", "1.1.1")
+    os.remove(web.UPDATE_CACHE)
+    web._UPDATE_MEMO.clear()                  # a fresh process with no cached answer
+    assert web.update_status(now=1_000_000)["update_available"] is False
+
+
+def test_update_check_can_be_switched_off(update_env, monkeypatch):
+    monkeypatch.setenv("LITSURVEY_UPDATE_CHECK", "false")
+    assert web.update_status(now=1_000_000) == {"enabled": False, "latest": None, "update_available": False}
+    assert update_env == []                               # PyPI never asked
+
+
+def test_trailing_zero_versions_are_equal():
+    assert web.version_tuple("1.2") == web.version_tuple("1.2.0")
+    assert web.version_tuple("2.0") > web.version_tuple("1.9.9")
+
+
+def test_a_damaged_update_cache_does_not_break_the_page(update_env):
+    with open(web.UPDATE_CACHE, "w") as f:
+        f.write('{"checked": "yesterday", "latest": 5}')
+    assert web.update_status(now=1_000_000)["latest"] == "1.2.0"
+
+
+def test_pypi_is_asked_once_even_if_the_cache_cannot_be_written(update_env, monkeypatch):
+    monkeypatch.setattr(web.config, "write_private", lambda *a: (_ for _ in ()).throw(OSError("read-only")))
+    monkeypatch.setattr(web, "_UPDATE_MEMO", {})
+    web.update_status(now=1_000_000)
+    web.update_status(now=1_000_001)
+    assert len(update_env) == 1
+
+
+def test_a_run_never_overwrites_another(monkeypatch, tmp_path):
+    monkeypatch.setattr(history, "RUNS", str(tmp_path / "runs"))
+    monkeypatch.setattr(history, "INDEX", str(tmp_path / "history.jsonl"))
+    ids = iter(["20261010-120000-aaaaaa-search", "20261010-120000-aaaaaa-search", "20261010-120000-bbbbbb-search"])
+    monkeypatch.setattr(history, "new_id", lambda mode: next(ids))
+    a = history.record("search", {"text": "first"}, papers=[])
+    b = history.record("search", {"text": "second"}, papers=[])
+    assert a != b and history.load(a)["inputs"]["text"] == "first"

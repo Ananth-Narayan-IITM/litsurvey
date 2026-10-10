@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import secrets
 import time
 
 from .config import DATA_DIR, ensure_data_dir, write_private
@@ -22,7 +23,10 @@ def _run_path(run_id):
 
 
 def new_id(mode):
-    return time.strftime("%Y%m%d-%H%M%S") + "-" + mode
+    """Time, a short random part, and the mode. The random part matters: the web
+    page runs jobs in threads, and two runs in the same second would otherwise
+    get the same id and the second would overwrite the first."""
+    return f"{time.strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(3)}-{mode}"
 
 
 def record(mode, inputs, papers=None, report=None, log=None, out_file=None,
@@ -31,10 +35,16 @@ def record(mode, inputs, papers=None, report=None, log=None, out_file=None,
     if os.path.dirname(RUNS) == DATA_DIR:     # tests point RUNS elsewhere
         ensure_data_dir()
     os.makedirs(RUNS, mode=0o700, exist_ok=True)
-    run_id = run_id or new_id(mode)
+    if not run_id:
+        run_id = new_id(mode)
+        while os.path.exists(os.path.join(RUNS, run_id + ".json")):   # never overwrite a run
+            run_id = new_id(mode)
     entry = {"id": run_id, "time": time.strftime("%Y-%m-%d %H:%M:%S"), "mode": mode,
              "inputs": inputs, "n_results": len(papers) if papers is not None else None,
              "out_file": out_file or "", "has_report": bool(report)}
+    agent = os.environ.get("LITSURVEY_AGENT")
+    if agent:                  # made by a subscription agent, not typed by the user
+        entry["agent"] = agent
     write_private(os.path.join(RUNS, run_id + ".json"),
                   json.dumps({**entry, "papers": papers, "report": report, "log": log,
                               "stats": stats}, indent=1, ensure_ascii=False))

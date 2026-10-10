@@ -264,8 +264,10 @@ def cli_command(tool):
     return argv, spec["stdin"]
 
 
-def run_cli(tool, prompt, timeout=1800):
-    """Hand the whole task to a subscription CLI agent; return its final text."""
+def run_cli(tool, prompt, timeout=1800, agent_token=None):
+    """Hand the whole task to a subscription CLI agent; return its final text.
+    agent_token marks the litsurvey runs the agent makes, so the search log can
+    tell them from runs the user makes by hand at the same time."""
     argv, use_stdin = cli_command(tool)
     # substitute the template's own placeholders first; the prompt goes in last
     # so that a claim containing the literal text "{outfile}" is not rewritten
@@ -286,7 +288,8 @@ def run_cli(tool, prompt, timeout=1800):
         pass
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)   # allow launching Claude Code from inside a Claude Code session
-    env["LITSURVEY_AGENT"] = "1"  # litsurvey then refuses --out, history and nested agents
+    # litsurvey then refuses --out, history and nested agents, and tags its runs
+    env["LITSURVEY_AGENT"] = agent_token or "1"
     try:
         proc = subprocess.run(argv, input=prompt if use_stdin else None, capture_output=True,
                               text=True, timeout=timeout, env=env)
@@ -407,6 +410,35 @@ def _parse_args(a):
         return {}
 
 
+# The agent's conversation (instructions, several searches of up to 9,000
+# characters each, an arXiv paper of up to 36,000) needs far more than
+# Ollama's default window of a few thousand tokens. Ollama does not say when it
+# overflows: it silently drops the oldest messages, the instructions first.
+MIN_OLLAMA_CTX = 32768
+_OLLAMA_CTX = {}
+
+
+def ollama_num_ctx(model):
+    """The window to ask Ollama for: MIN_OLLAMA_CTX, unless the model's own
+    Modelfile already sets a larger one (as a derived model such as one built
+    for 64K or 128K does), which is then left alone. None means "send nothing"."""
+    if model not in _OLLAMA_CTX:
+        configured = 0
+        try:
+            info = http.post_json(CFG["ollama_host"] + "/api/show", {"model": model}, timeout=10)
+            m = re.search(r"(?m)^\s*num_ctx\s+(\d+)", info.get("parameters") or "")
+            configured = int(m.group(1)) if m else 0
+        except Exception:  # noqa: BLE001 - an older server: fall back to asking for the minimum
+            pass
+        _OLLAMA_CTX[model] = None if configured >= MIN_OLLAMA_CTX else MIN_OLLAMA_CTX
+    return _OLLAMA_CTX[model]
+
+
+CUT_OFF_NOTE = ("\n\n> **litsurvey note:** the model stopped because it reached its length limit, "
+                "so this report may end mid-way. Run it again with a model that allows longer "
+                "replies, or ask a narrower question.")
+
+
 def _chat_ollama(model, messages, tools):
     conv = []
     for m in messages:
@@ -419,6 +451,9 @@ def _chat_ollama(model, messages, tools):
         else:
             conv.append({"role": m["role"], "content": m["content"]})
     payload = {"model": model, "messages": conv, "stream": False}
+    ctx = ollama_num_ctx(model)
+    if ctx:
+        payload["options"] = {"num_ctx": ctx}
     if tools:
         payload["tools"] = [{"type": "function", "function": t} for t in tools]
     resp = http.post_json(CFG["ollama_host"] + "/api/chat", payload)
@@ -426,7 +461,10 @@ def _chat_ollama(model, messages, tools):
     calls = [{"id": uuid.uuid4().hex[:12], "name": c["function"]["name"],
               "args": _parse_args(c["function"].get("arguments"))}
              for c in (msg.get("tool_calls") or [])]
-    return {"content": msg.get("content") or "", "tool_calls": calls}
+    content = msg.get("content") or ""
+    if resp.get("done_reason") == "length" and not calls:
+        content += CUT_OFF_NOTE
+    return {"content": content, "tool_calls": calls}
 
 
 def _chat_openai(model, messages, tools, options=None):
@@ -458,11 +496,15 @@ def _chat_openai(model, messages, tools, options=None):
         hdrs["HTTP-Referer"] = "https://github.com/udaykdk/litsurvey"
         hdrs["X-Title"] = "litsurvey"
     resp = http.post_json(base + "/v1/chat/completions", payload, headers=hdrs)
-    msg = (resp.get("choices") or [{}])[0].get("message") or {}
+    choice = (resp.get("choices") or [{}])[0]
+    msg = choice.get("message") or {}
     calls = [{"id": c.get("id") or uuid.uuid4().hex[:12], "name": c["function"]["name"],
               "args": _parse_args(c["function"].get("arguments"))}
              for c in (msg.get("tool_calls") or [])]
-    return {"content": msg.get("content") or "", "tool_calls": calls}
+    content = msg.get("content") or ""
+    if choice.get("finish_reason") == "length" and not calls:
+        content += CUT_OFF_NOTE
+    return {"content": content, "tool_calls": calls}
 
 
 def _chat_anthropic(model, messages, tools):
@@ -506,4 +548,7 @@ def _chat_anthropic(model, messages, tools):
             text.append(b.get("text") or "")
         elif b.get("type") == "tool_use":
             calls.append({"id": b["id"], "name": b["name"], "args": b.get("input") or {}})
-    return {"content": "\n".join(text), "tool_calls": calls}
+    content = "\n".join(text)
+    if resp.get("stop_reason") == "max_tokens" and not calls:
+        content += CUT_OFF_NOTE
+    return {"content": content, "tool_calls": calls}

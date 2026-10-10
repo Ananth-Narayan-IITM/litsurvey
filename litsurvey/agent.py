@@ -4,6 +4,7 @@ import json
 import re
 import sys
 import time
+import uuid
 
 from . import backends, history, papers
 from .sources import arxiv, run_search, semanticscholar
@@ -96,6 +97,72 @@ KINDS = {"novelty": (NOVELTY_SYSTEM, "Assess the novelty of this claim:\n\n{text
          "research": (RESEARCH_SYSTEM, "Research question:\n\n{text}", "research report")}
 
 
+def returned_ids(plist):
+    """Identifiers of the papers a tool call returned, kept in the search log so
+    that a report can be checked against what the model actually saw."""
+    out = []
+    for p in plist:
+        if p.get("doi"):
+            out.append("DOI:" + p["doi"])
+        if p.get("arxiv"):
+            out.append("ARXIV:" + p["arxiv"])
+    return out
+
+
+_DOI_IN_TEXT = re.compile(r"\b10\.\d{4,9}/[^\s\"'<>\[\]{}|`]+", re.I)
+_ARXIV_IN_TEXT = re.compile(r"(?i)(?:\barxiv[:\s]*|arxiv\.org/(?:abs|pdf|html)/)"
+                            r"(\d{4}\.\d{4,5}|[a-z\-]+(?:\.[a-z]{2})?/\d{7})(?:v\d+)?")
+
+
+def _clean_doi(raw):
+    """A DOI as written in running text or Markdown: keep brackets that belong
+    to it, as in 10.1016/S0140-6736(20)30183-5, and drop what follows it:
+    sentence punctuation, Markdown emphasis, a closing bracket around it."""
+    d = raw
+    while True:
+        before = d
+        d = d.rstrip(".,;:!?*_~")
+        if d.endswith(")") and d.count(")") > d.count("("):
+            d = d[:-1]
+        if d == before:
+            return d
+
+
+def check_citations(report, log):
+    """Compare the DOIs and arXiv ids in a report with the papers the searches
+    returned. The prompt says "cite only search results"; this is the check.
+    Returns (unverified identifiers, number of identifiers found)."""
+    seen = set()
+    for e in log:
+        for rid in e.get("returned") or []:
+            kind, _, val = rid.partition(":")
+            rec = papers.make(doi=val) if kind.upper() == "DOI" else papers.make(arxiv=val)
+            seen.update(k for k in papers.keys(rec) if not k.startswith("title:"))
+    cited = {}
+    for m in _DOI_IN_TEXT.finditer(report or ""):
+        d = _clean_doi(m.group(0))
+        cited.setdefault(d.lower(), papers.make(doi=d))
+    for m in _ARXIV_IN_TEXT.finditer(report or ""):
+        cited.setdefault("arxiv:" + m.group(1).lower(), papers.make(arxiv=m.group(1)))
+    unverified = sorted(c for c, rec in cited.items()
+                        if not any(k in seen for k in papers.keys(rec) if not k.startswith("title:")))
+    return unverified, len(cited)
+
+
+def citation_note(report, log):
+    unverified, n = check_citations(report, log)
+    if not n:
+        return ""
+    if not unverified:
+        return (f"\n\n> **Citation check (litsurvey):** all {n} DOIs and arXiv ids in this report "
+                f"appeared in this run's search results. References without an identifier are "
+                f"not checked.\n")
+    items = "\n".join(f">  - `{u}`" for u in unverified)
+    return (f"\n\n> **Citation check (litsurvey):** {len(unverified)} of {n} DOIs and arXiv ids in "
+            f"this report did not appear in any search result of this run. The model may have "
+            f"cited them from memory; check each before use:\n{items}\n")
+
+
 VERBATIM_RUN = 8   # consecutive words of the user's input a query may not repeat
 
 
@@ -126,19 +193,26 @@ def dispatch(name, args, log, guard_text=None):
             plist, stats = run_search(args["query"], limit=10, year_from=args.get("year_from"))
             entry["hits"] = stats
             entry["merged"] = len(plist)
-            return papers.compact(plist)
+            shown = papers.compact(plist)
+            entry["returned"] = returned_ids(shown)      # exactly what the model sees
+            return shown
         if name in ("get_citations", "get_references"):
             direction = "citations" if name == "get_citations" else "references"
             plist = semanticscholar.linked(args["paper_id"], direction, limit=15)
             entry["merged"] = len(plist)
-            return papers.compact(plist)
+            shown = papers.compact(plist)
+            entry["returned"] = returned_ids(shown)
+            return shown
         if name == "get_related":
             plist = semanticscholar.related(args["paper_id"], limit=15)
             entry["merged"] = len(plist)
-            return papers.compact(plist)
+            shown = papers.compact(plist)
+            entry["returned"] = returned_ids(shown)
+            return shown
         if name == "read_paper":
             txt = arxiv.full_text(args["arxiv_id"])
             entry["chars"] = len(txt)
+            entry["returned"] = ["ARXIV:" + args["arxiv_id"].split(":")[-1]]
             return {"full_text": txt}
         entry["error"] = f"unknown tool {name}"
         return {"error": entry["error"]}
@@ -185,6 +259,7 @@ def run(kind, text, backend=None, model=None, rounds=8, progress=None, options=N
         messages.append({"role": "user", "content":
                          f"Stop searching. Write the final {kind_name} now, based on everything found so far."})
         final = backends.chat(backend, model, messages, options=options)["content"]
+    final = (final or "") + citation_note(final, log)
     return {"report": final, "log": log, "backend": backend, "model": model,
             "rounds_used": used}
 
@@ -211,22 +286,30 @@ def _run_cli(kind, text, tool, rounds, say):
     say(f"[agent] handing over to {tool}; this can take several minutes and shows no progress "
         f"until it finishes. Its litsurvey commands will appear in the search log.")
     start = time.time()
-    report = backends.run_cli(tool, prompt)
+    token = uuid.uuid4().hex[:12]
+    report = backends.run_cli(tool, prompt, agent_token=token)
+    # Only the agent's own runs carry its token; a search the user ran by hand
+    # in the meantime does not, and must not count as something the agent saw.
+    tagged = [r for r in history.runs_since(start - 1)
+              if r["mode"] in _CLI_MODE_TOOL and r.get("agent") == token]
+    if not tagged:
+        say(f"[agent] none of {tool}'s litsurvey commands could be identified, so the search "
+            f"log is empty and every identifier in the report will be listed as unchecked")
     log = []
-    for r in history.runs_since(start - 1):
-        if r["mode"] not in _CLI_MODE_TOOL:
-            continue
+    for r in tagged:
         inp = r["inputs"].get("text", "")
         key = "query" if r["mode"] == "search" else ("doi" if r["mode"] == "oa" else "paper_id")
         entry = {"time": r["time"], "tool": _CLI_MODE_TOOL[r["mode"]], "args": {key: inp},
                  "merged": r.get("n_results")}
         try:
-            stats = history.load(r["id"]).get("stats")
-            if stats:
-                entry["hits"] = stats
+            run = history.load(r["id"])
+            if run.get("stats"):
+                entry["hits"] = run["stats"]
+            entry["returned"] = returned_ids(run.get("papers") or [])
         except OSError:
             pass
         log.append(entry)
+    report += citation_note(report, log)
     say(f"[agent] {tool} finished; {len(log)} litsurvey commands recorded")
     label = tool + (f" ({detail})" if detail else "")
     return {"report": report, "log": log, "backend": "cli", "model": label, "rounds_used": None}

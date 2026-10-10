@@ -19,7 +19,7 @@ def test_bibtex_entries_types_and_escaping():
     assert "@article{public2024learning," in bib
     assert "@misc{author2025arxiv," in bib
     assert "eprint = {2501.00001}" in bib and "archivePrefix = {arXiv}" in bib
-    assert "\\{Braces\\}" in bib and "\\&" in bib and "50\\%" in bib
+    assert "\\textbraceleft{}Braces\\textbraceright{}" in bib and "\\&" in bib and "50\\%" in bib
     assert "author = {Public, Jane Q and Li, Wei}" in bib
 
 
@@ -47,3 +47,27 @@ def test_render_and_write(tmp_path):
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_bibtex_escapes_latex_specials_and_handles_suffixes():
+    from litsurvey import export, papers
+    bib = export.to_bibtex([papers.make(title="C# a_b ~x^2 $5 & 10% {g}", year=2020,
+                                        authors=["Martin Luther King Jr.", "Ann Lee III"])])
+    title = [l for l in bib.splitlines() if "title" in l][0]
+    for raw in ("C#", "a_b", " ~x", "^2", " $5"):
+        assert raw not in title
+    assert r"C\# a\_b \textasciitilde{}x\textasciicircum{}2 \$5 \& 10\% \textbraceleft{}g\textbraceright{}" in title
+    assert "author = {King, Jr., Martin Luther and Lee, III, Ann}" in bib
+    assert bib.startswith("@misc{king2020")
+
+
+def test_bibtex_stays_balanced_with_a_lone_brace():
+    from litsurvey import export, papers
+    bib = export.to_bibtex([papers.make(title="Sets {a, b and c", year=2020, doi="10.5555/x"),
+                            papers.make(title="Closing } only", year=2021)])
+    for entry in bib.strip().split("\n\n"):
+        depth = 0
+        for ch in entry:
+            depth += {"{": 1, "}": -1}.get(ch, 0)
+            assert depth >= 0
+        assert depth == 0

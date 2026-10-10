@@ -123,11 +123,14 @@ def test_cli_backend_custom_command_and_search_log(monkeypatch, tmp_path):
     assert backends.resolve(None, None) == ("cli", "custom")
     real = backends.run_cli
 
-    def run_and_record(tool, prompt, timeout=1800):   # the agent's own litsurvey calls get recorded
+    def run_and_record(tool, prompt, timeout=1800, agent_token=None):
         assert "litsurvey search" in prompt and "Assess the novelty" in prompt
+        history.record("search", {"text": "typed by the user meanwhile"}, papers=[])
+        monkeypatch.setenv("LITSURVEY_AGENT", agent_token)   # the agent's own calls carry the token
         history.record("search", {"text": "kan pinn"}, papers=[], stats={"s2": 0, "openalex": 3})
         history.record("cites", {"text": "DOI:10/x"}, papers=[{}])
-        return real(tool, prompt, timeout)
+        monkeypatch.delenv("LITSURVEY_AGENT")
+        return real(tool, prompt, timeout, agent_token)
     monkeypatch.setattr(backends, "run_cli", run_and_record)
     res = agent.run("novelty", "some claim", backend="cli", rounds=2, progress=lambda s: None)
     assert res["report"].startswith("## Verdict") and res["backend"] == "cli" and res["model"] == "custom"
@@ -473,3 +476,91 @@ def test_custom_commands_ignore_cli_model(monkeypatch):
     monkeypatch.setitem(backends.CFG, "cli_model", "opus")
     monkeypatch.setitem(backends.CFG, "cli_effort", "high")
     assert backends.cli_command("custom")[0] == ["mytool", "-p", "{prompt}"]
+
+
+def test_citation_check_flags_ids_the_searches_never_returned():
+    log = [{"returned": ["DOI:10.1038/nature14539", "ARXIV:2404.19756"]},
+           {"returned": ["DOI:10.36227/techrxiv.16610629.v7"]}]
+    report = ("[1] LeCun, Nature, doi:10.1038/nature14539. [2] KAN, arXiv:2404.19756v3. "
+              "[3] Self-Refine, https://doi.org/10.36227/techrxiv.16610629.v13 "
+              "[4] Invented, 10.9999/made.up.2020.")
+    unverified, n = agent.check_citations(report, log)
+    assert n == 4 and unverified == ["10.9999/made.up.2020"]
+    note = agent.citation_note(report, log)
+    assert "1 of 4" in note and "10.9999/made.up.2020" in note
+    assert "all 1" in agent.citation_note("see 10.1038/nature14539.", log)
+    assert agent.citation_note("no identifiers here", log) == ""
+
+
+def test_builtin_loop_logs_returned_ids_and_appends_the_check(monkeypatch):
+    from litsurvey import papers as P
+    replies = iter([{"content": "", "tool_calls": [{"id": "1", "name": "search_papers", "args": {"query": "kan"}}]},
+                    {"content": "## Report\nSee 10.1234/real and 10.5678/fake.", "tool_calls": []}])
+    monkeypatch.setattr(backends, "resolve", lambda *a: ("ollama", "m"))
+    monkeypatch.setattr(backends, "chat", lambda *a, **k: next(replies))
+    monkeypatch.setattr(agent, "run_search", lambda *a, **k: ([P.make(title="Real", doi="10.1234/real")], {"openalex": 1}))
+    res = agent.run("novelty", "a claim", progress=lambda s: None)
+    assert res["log"][0]["returned"] == ["DOI:10.1234/real"]
+    assert "10.5678/fake" in res["report"].split("Citation check")[1]
+
+
+def test_ollama_window_respects_a_larger_modelfile_setting(monkeypatch):
+    monkeypatch.setattr(backends, "_OLLAMA_CTX", {})
+    shown = {"big": {"parameters": "num_ctx                        131072\nstop <|im_end|>"},
+             "plain": {"parameters": "temperature 0.6"}}
+    monkeypatch.setattr(backends.http, "post_json", lambda url, payload, **k: shown[payload["model"]])
+    assert backends.ollama_num_ctx("big") is None
+    assert backends.ollama_num_ctx("plain") == backends.MIN_OLLAMA_CTX
+
+
+def test_cut_off_replies_are_flagged(monkeypatch):
+    monkeypatch.setattr(backends.http, "post_json", lambda *a, **k: {
+        "content": [{"type": "text", "text": "A long survey that stops"}], "stop_reason": "max_tokens"})
+    monkeypatch.setitem(backends.CFG, "anthropic_api_key", "x")
+    out = backends.chat("anthropic", "m", [{"role": "user", "content": "q"}])
+    assert out["content"].startswith("A long survey") and "length limit" in out["content"]
+    monkeypatch.setattr(backends.http, "post_json", lambda *a, **k: {
+        "choices": [{"message": {"content": "partial"}, "finish_reason": "length"}]})
+    assert "length limit" in backends.chat("openai", "m", [{"role": "user", "content": "q"}],
+                                           options={"base_url": "http://localhost:1"})["content"]
+
+
+@pytest.mark.parametrize("text,expected_unverified", [
+    ("Lancet, doi:10.1016/S0140-6736(20)30183-5.", []),            # brackets inside a DOI
+    ("(see 10.1016/S0140-6736(20)30183-5)", []),                    # ...and around it
+    ("**10.1038/nature14539**: deep learning", []),                 # Markdown bold, colon
+    ("[link](https://doi.org/10.1038/nature14539)", []),
+    ("10.1234/real(fake)", ["10.1234/real(fake)"]),                  # not the returned DOI
+    ("https://arxiv.org/pdf/2501.12345v2", ["arxiv:2501.12345"]),    # pdf link, never returned
+    ("https://arxiv.org/html/2404.19756v1", []),
+])
+def test_citation_check_parses_identifiers_as_written(text, expected_unverified):
+    log = [{"returned": ["DOI:10.1016/S0140-6736(20)30183-5", "DOI:10.1038/nature14539",
+                         "DOI:10.1234/real", "ARXIV:2404.19756"]}]
+    unverified, n = agent.check_citations(text, log)
+    assert n >= 1 and unverified == expected_unverified
+
+
+def test_the_log_holds_exactly_the_papers_the_model_saw(monkeypatch):
+    from litsurvey import papers as P
+    plist = [P.make(title=f"P{i}", doi=f"10.5555/p{i}") for i in range(12)]
+    monkeypatch.setattr(agent, "run_search", lambda *a, **k: (plist, {"openalex": 12}))
+    log = []
+    shown = agent.dispatch("search_papers", {"query": "x"}, log)
+    assert len(log[0]["returned"]) == len(shown) == 8
+    assert "DOI:10.5555/p9" not in log[0]["returned"]          # never shown, so not "returned"
+
+
+def test_untagged_runs_are_not_counted_as_the_agents(monkeypatch):
+    monkeypatch.setitem(backends.CFG, "cli_command", f"{sys.executable} -c \"print('report 10.1038/nature14539')\"")
+    monkeypatch.setitem(backends.CFG, "backend", "cli")
+    monkeypatch.setitem(backends.CFG, "cli_tool", "custom")
+    real = backends.run_cli
+
+    def user_searches_meanwhile(tool, prompt, timeout=1800, agent_token=None):
+        history.record("search", {"text": "typed by hand"},
+                       papers=[{"doi": "10.1038/nature14539", "arxiv": ""}])
+        return real(tool, prompt, timeout, agent_token)
+    monkeypatch.setattr(backends, "run_cli", user_searches_meanwhile)
+    res = agent.run("novelty", "claim", backend="cli", progress=lambda s: None)
+    assert res["log"] == [] and "did not appear" in res["report"]

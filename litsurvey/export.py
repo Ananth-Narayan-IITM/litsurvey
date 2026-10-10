@@ -7,13 +7,25 @@ import re
 from . import papers as P
 
 
+# LaTeX special characters in titles, names, venues and abstracts. Done in one
+# pass so the braces of \textasciitilde{} are not themselves escaped.
+# BibTeX counts every brace, escaped or not, so a lone "{" in a title written
+# as \{ would still unbalance the entry; \textbraceleft{} keeps it balanced.
+_BIB_SPECIAL = {"\\": r"\textbackslash{}", "{": r"\textbraceleft{}", "}": r"\textbraceright{}",
+                "&": r"\&", "%": r"\%",
+                "#": r"\#", "_": r"\_", "$": r"\$", "~": r"\textasciitilde{}",
+                "^": r"\textasciicircum{}"}
+_BIB_RE = re.compile("|".join(re.escape(c) for c in _BIB_SPECIAL))
+
+
 def _bib_escape(s):
-    return (s or "").replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}") \
-        .replace("&", "\\&").replace("%", "\\%")
+    return _BIB_RE.sub(lambda m: _BIB_SPECIAL[m.group(0)], s or "")
 
 
 def _lastname(name):
     parts = (name or "").replace(",", " ").split()
+    if len(parts) > 2 and _SUFFIX.match(parts[-1]):
+        parts.pop()
     return parts[-1] if parts else "anon"
 
 
@@ -33,12 +45,18 @@ def _bibkey(p, used):
     return key
 
 
+_SUFFIX = re.compile(r"^(jr|sr|ii|iii|iv|v)\.?$", re.I)
+
+
 def _bib_author(name):
-    """'Given Family' -> 'Family, Given' so BibTeX parses multi-part names."""
-    parts = name.split()
+    """'Given Family' -> 'Family, Given' so BibTeX parses multi-part names, and
+    'Given Family Jr.' -> 'Family, Jr., Given' (BibTeX's form for a suffix)."""
+    parts = name.replace(",", " ").split()
+    suffix = parts.pop() if len(parts) > 2 and _SUFFIX.match(parts[-1]) else ""
     if len(parts) < 2:
         return name
-    return f"{parts[-1]}, {' '.join(parts[:-1])}"
+    head = f"{parts[-1]}, {suffix}, " if suffix else f"{parts[-1]}, "
+    return head + " ".join(parts[:-1])
 
 
 def to_bibtex(plist):

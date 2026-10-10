@@ -80,7 +80,11 @@ coloured banner before you press Run.
   instructions less likely to work; it does not make them impossible.
 - The model is told to cite only titles, years, venues and DOIs that appeared
   in search results, never from memory. This reduces invented references; it
-  does not make them impossible. Check DOIs before using them.
+  does not make them impossible. litsurvey then checks every DOI and arXiv id
+  in the report against the papers the searches returned (they are kept in
+  the search log) and appends a "Citation check" note naming any that did
+  not come from a search. References given without an identifier are not
+  checked. Check DOIs before using them.
 - Tool results sent to the model are capped in size, and the round limit
   bounds how many queries a run can make.
 
@@ -130,6 +134,10 @@ matters, use a local model.
   the files litsurvey writes in it are mode 600, so other accounts on a
   shared machine cannot read your claims or reports.
 - `~/.litsurvey/config.json`: your API key and settings (file mode 600).
+- `~/.litsurvey/.update-check`: the latest version number on PyPI and when it
+  was last asked, for the web page's "Update available" link. Asking PyPI
+  sends nothing but an ordinary request for the litsurvey package page;
+  `update_check: false` in the config turns it off.
 - `~/.litsurvey/history.jsonl` and `~/.litsurvey/runs/`: every completed run's inputs
   and results, so the web page's History tab and `litsurvey history` can
   show them. This stays on your disk. Delete runs with
@@ -138,4 +146,5 @@ matters, use a local model.
 ## Rate-limit stamps
 
 `~/.litsurvey/.ratelimit-<host>` files hold only a timestamp, used to keep the
-CLI and the web page together under each API's request limit.
+CLI and the web page together under each API's request limit. This is best
+effort: two processes that check the stamp at the same instant can both send.

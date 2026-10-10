@@ -190,8 +190,12 @@ results. In our testing, on a laptop with 48 GB of unified memory:
 
 Ollama's default context window depends on the version and the memory
 available (4k on older installs; check with `ollama ps` while a model is
-loaded). The agent needs at least 32k, better 64k, for its search results.
-If yours is smaller, create a variant with a larger window once:
+loaded). The agent needs at least 32k, better 64k, for its search results,
+and Ollama does not warn when a conversation overflows: it drops the oldest
+messages, the agent's instructions first. litsurvey therefore asks for a 32k
+window on every request, unless the model's own Modelfile already sets a
+larger one, which it then leaves alone. For 64k or more, create a variant
+with a larger window once:
 
 ```
 printf 'FROM qwen3:30b-thinking\nPARAMETER num_ctx 65536\n' > Modelfile
