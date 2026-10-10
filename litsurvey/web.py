@@ -23,7 +23,7 @@ def _page():
         return f.read().replace("{{VERSION}}", __version__)
 
 
-def _start_job(mode, params, out):
+def _start_job(mode, params):
     job_id = uuid.uuid4().hex[:10]
     job = {"id": job_id, "mode": mode, "status": "running", "progress": [],
            "started": time.time(), "result": None, "run_id": None, "error": None,
@@ -45,7 +45,7 @@ def _start_job(mode, params, out):
         http.set_reporter(reporter)
         try:
             result = ops.run_mode(mode, params, progress=progress)
-            run_id, written = ops.save(mode, params, result, out=out)
+            run_id, written = ops.save(mode, params, result)
             job["result"] = {k: v for k, v in result.items() if k != "log"}
             if result.get("log"):
                 job["result"]["log"] = result["log"]
@@ -60,9 +60,50 @@ def _start_job(mode, params, out):
     return job_id
 
 
+MAX_BODY = 1_000_000   # bytes; a job request is a few hundred
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # quiet
         pass
+
+    def _local_names(self):
+        port = self.server.server_address[1]
+        hosts = ("127.0.0.1", "localhost", "[::1]")
+        names = {f"{h}:{port}" for h in hosts}
+        if port == 80:                  # browsers omit the default port
+            names |= set(hosts)
+        return names
+
+    def _guard(self, post=False):
+        """Serve only the page this server itself handed out.
+
+        The server listens on 127.0.0.1, but a web page open in the same browser
+        can still reach it in two ways. A cross-site form or fetch with a "simple"
+        content type needs no CORS preflight, so it could start jobs. And a page
+        whose domain is re-pointed at 127.0.0.1 (DNS rebinding) could read the
+        history. The Host header defeats rebinding, because the attacker's domain
+        name stays in it; Origin and Sec-Fetch-Site catch cross-site requests;
+        and requiring a JSON content type on POST forces a preflight that this
+        server never answers. Sends a 403 and returns False when refused."""
+        names = self._local_names()
+        host = (self.headers.get("Host") or "").strip().lower()
+        if host and host not in names:
+            self._json({"error": "refused: unexpected Host header"}, 403)
+            return False
+        origin = (self.headers.get("Origin") or "").strip().lower()
+        if origin and origin not in {"http://" + n for n in names}:
+            self._json({"error": "refused: request from another site"}, 403)
+            return False
+        if (self.headers.get("Sec-Fetch-Site") or "").lower() == "cross-site":
+            self._json({"error": "refused: request from another site"}, 403)
+            return False
+        if post:
+            ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                self._json({"error": "refused: POST must be application/json"}, 415)
+                return False
+        return True
 
     def _send(self, code, body, ctype="application/json", extra=None):
         data = body if isinstance(body, bytes) else body.encode("utf-8")
@@ -78,6 +119,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj, ensure_ascii=False))
 
     def do_GET(self):
+        if not self._guard():
+            return
         u = urllib.parse.urlparse(self.path)
         parts = [p for p in u.path.split("/") if p]
         q = urllib.parse.parse_qs(u.query)
@@ -134,9 +177,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
 
     def do_POST(self):
+        if not self._guard(post=True):
+            return
         u = urllib.parse.urlparse(self.path)
         parts = [p for p in u.path.split("/") if p]
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._json({"error": "bad Content-Length"}, 400)
+        if length > MAX_BODY:
+            return self._json({"error": "request too large"}, 413)
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
@@ -151,15 +201,18 @@ class Handler(BaseHTTPRequestHandler):
                 params["n"] = int(params["n"])
             if "year_from" in params:
                 params["year_from"] = int(params["year_from"])
-            out = (body.get("out") or "").strip() or None
+            # No "out" here: the page offers downloads, and a server that writes
+            # wherever a request says is a file-overwrite primitive.
             try:
                 papers.normalize_input(params.get("text", ""))
             except ValueError as e:
                 return self._json({"error": str(e)}, 400)
-            return self._json({"job_id": _start_job(mode, params, out)})
+            return self._json({"job_id": _start_job(mode, params)})
         return self._json({"error": "not found"}, 404)
 
     def do_DELETE(self):
+        if not self._guard():
+            return
         parts = [p for p in self.path.split("/") if p]
         if parts[:2] == ["api", "run"] and len(parts) == 3:
             history.delete(parts[2])
@@ -168,6 +221,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def serve(port=8765, open_browser=True):
+    config.tighten_data_dir()
     server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
     print(f"litsurvey web interface at {url}  (Ctrl-C to stop)")

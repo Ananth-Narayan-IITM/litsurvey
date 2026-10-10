@@ -304,7 +304,7 @@ def test_codex_argv_keeps_the_sandbox_escapes(monkeypatch):
     for k in ("cli_model", "cli_effort"):
         monkeypatch.setitem(backends.CFG, k, "")
     argv, use_stdin = backends.cli_command("codex")
-    assert use_stdin is False and "--full-auto" not in argv
+    assert use_stdin is True and "--full-auto" not in argv   # prompt on stdin, not in ps
     assert "--skip-git-repo-check" in argv
     assert argv[argv.index("--sandbox") + 1] == "workspace-write"
     assert "sandbox_workspace_write.network_access=true" in argv

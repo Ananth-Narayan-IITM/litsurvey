@@ -6,7 +6,46 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-10
+
+### Security
+These were found and reported privately by Anant Goyal. Upgrade if you use
+`litsurvey web`.
+
+- The web server accepted requests from other web sites. A page open in the
+  same browser could start jobs and, through the output-file field, write a
+  file anywhere in the user's home folder; a page that points its own domain
+  name at 127.0.0.1 could read the run history. The server now refuses any
+  request whose `Host` is not its own loopback address and port, any request
+  carrying another site's `Origin` or `Sec-Fetch-Site: cross-site`, and any
+  POST that is not `application/json`. The web API no longer takes an output
+  path at all; results are downloaded from the page.
+- `is_local()` decided "local" by a substring test, so a cloud URL such as
+  `https://localhost.example.com` was reported as a local model. The host name
+  is now parsed and compared exactly, here and in the page's banner.
+- `~/.litsurvey` is now readable by its owner only (mode 700, tightened at
+  start-up on existing installs) and run files and the history index are
+  mode 600.
+- Codex CLI now gets the prompt on stdin, so the claim is not visible to other
+  accounts in the process list.
+- Claude Code is started with only its shell tool (`--tools Bash`), and its
+  shell may run only the five lookup commands (`litsurvey search`, `paper`,
+  `cites`, `refs`, `related`). Before, its read tools were available without
+  asking, and `litsurvey history show` accepted a path such as `../../file`.
+- History run ids are checked against litsurvey's own format, so neither the
+  command line nor the web API can be pointed at another file.
+- When a subscription agent runs `litsurvey`, it refuses `--out`, `history`,
+  `init`, `web` and the agent commands (an environment variable marks the
+  agent's shell). This applies to Codex, Gemini and Antigravity as well.
+- Search results reach the model inside marked blocks, with an instruction
+  that nothing in them is a command. With a local model or an API key, a
+  search query that repeats eight or more consecutive words of the user's
+  input is refused. `docs/confidentiality.md` now says plainly which parts of
+  the confidentiality rules are instructions and which are enforced, and what
+  each subscription CLI could do if a hostile abstract steered it.
+
 ### Added
+- `SECURITY.md`: how to report a vulnerability privately.
 - **Google Antigravity CLI (`agy`) support** as a subscription CLI backend
   alongside Claude Code, Codex, and Gemini CLI. Automatically probes reasoning
   effort from `agy --help` (defaulting to `medium`).

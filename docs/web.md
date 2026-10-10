@@ -32,10 +32,10 @@ line when you want to script something or need one of those.
    box is greyed out until Novelty or Research is selected, and the page
    remembers your last choice. The model box offers the Ollama models it
    can see.
-4. **Output file.** Optional. An absolute path. For paper lists the
-   extension picks the format (`.bib`, `.ris`, `.csv`, `.json`, `.md`);
-   agent reports are always Markdown, with a `.log.json` beside them; an
-   open-access lookup is always written as JSON.
+4. **Downloads.** Once a run finishes, buttons below the results save it as
+   BibTeX, RIS, CSV, JSON or Markdown through the browser. The page cannot
+   write files to a path of its own; for that, use `--out` on the command
+   line.
 5. **The privacy banner.** Before you press Run, a green or orange banner
    says what will leave the machine for this mode and backend. Orange means
    a cloud backend will receive your text.
@@ -73,3 +73,9 @@ The store is `~/.litsurvey/runs/`; see
   opening a browser: `--no-browser`.
 - The server is single-user by design. Do not expose it to a network; it has
   no authentication.
+- It answers only the page it served. Requests whose `Host` is not
+  `127.0.0.1`, `localhost` or `[::1]` on its own port, requests carrying
+  another site's `Origin`, and POSTs that are not `application/json` are
+  refused. Without this, any web page open in the same browser could start
+  jobs, and a page that points its own domain name at 127.0.0.1 (DNS
+  rebinding) could read the history.

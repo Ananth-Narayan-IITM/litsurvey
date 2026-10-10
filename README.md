@@ -174,6 +174,7 @@ paper and DOI before using any claim. Details in
 - [docs/confidentiality.md](https://github.com/udaykdk/litsurvey/blob/main/docs/confidentiality.md): what leaves the machine, per mode and backend
 - [docs/api-keys.md](https://github.com/udaykdk/litsurvey/blob/main/docs/api-keys.md): getting and storing the Semantic Scholar key; running without one
 - [CONTRIBUTING.md](https://github.com/udaykdk/litsurvey/blob/main/CONTRIBUTING.md): reporting bugs, running tests, adding a source
+- [SECURITY.md](https://github.com/udaykdk/litsurvey/blob/main/SECURITY.md): reporting a vulnerability privately
 
 ## Coverage, and Google Scholar
 

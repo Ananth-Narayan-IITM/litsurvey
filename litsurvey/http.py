@@ -9,7 +9,7 @@ import urllib.parse
 import urllib.request
 
 from . import __version__
-from .config import DATA_DIR
+from .config import DATA_DIR, ensure_data_dir
 
 USER_AGENT = f"litsurvey/{__version__} (https://github.com/udaykdk/litsurvey)"
 
@@ -83,7 +83,7 @@ def _throttle(host):
         time.sleep(min(wait, interval))
     _last_call[host] = time.monotonic()
     try:
-        os.makedirs(DATA_DIR, exist_ok=True)
+        ensure_data_dir()
         with open(stamp, "a"):
             pass
         os.utime(stamp, None)

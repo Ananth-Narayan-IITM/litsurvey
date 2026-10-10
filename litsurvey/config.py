@@ -87,9 +87,42 @@ def load():
     return cfg
 
 
+def ensure_data_dir():
+    """Create ~/.litsurvey readable by its owner only, and tighten an existing one.
+    It holds the config and every past run: the text of novelty claims and
+    research questions, which other accounts on a shared machine should not read."""
+    os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)
+    try:
+        os.chmod(DATA_DIR, 0o700)
+    except OSError:
+        pass
+    return DATA_DIR
+
+
+def tighten_data_dir():
+    """Make an existing ~/.litsurvey owner-only. Called at start-up, so an install
+    from before 1.1.1 is fixed even if the user only reads the history."""
+    if os.path.isdir(DATA_DIR):
+        try:
+            os.chmod(DATA_DIR, 0o700)
+        except OSError:
+            pass
+
+
+def write_private(path, text):
+    """Write a file that only its owner can read (mode 600 on POSIX)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
+    try:
+        os.chmod(path, 0o600)       # an existing file keeps its old mode otherwise
+    except OSError:
+        pass
+
+
 def save(values):
     """Write the given keys to the config file, keeping other existing keys."""
-    os.makedirs(DATA_DIR, exist_ok=True)
+    ensure_data_dir()
     current = _read_json(CONFIG_PATH)
     current.update({k: v for k, v in values.items() if k in DEFAULTS})
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:

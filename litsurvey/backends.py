@@ -8,6 +8,7 @@ Neutral tool format: {"name", "description", "parameters"} (JSON schema).
 
 chat() returns {"content": str, "tool_calls": [{"id", "name", "args"}]}.
 """
+import ipaddress
 import json
 import os
 import re
@@ -16,13 +17,34 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import uuid
 
 from . import http
-from .config import CFG, DATA_DIR
+from .config import CFG, DATA_DIR, ensure_data_dir
 
 BACKENDS = ("cli", "ollama", "openai", "anthropic")
 LOCAL_BACKENDS = ("ollama",)   # data never leaves the machine
+
+
+def is_loopback_url(url):
+    """True only when the URL's host is this machine. The host name is parsed and
+    compared exactly: a substring test would call https://localhost.evil.com or
+    https://api.evil.com/?x=127.0.0.1 local, and the banner would then tell the
+    user a cloud run stays on the machine."""
+    raw = (url or "").strip()
+    if "://" not in raw:
+        raw = "http://" + raw
+    try:
+        host = (urllib.parse.urlsplit(raw).hostname or "").lower()
+    except ValueError:
+        return False
+    if host in ("localhost", "::1", "0.0.0.0") or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def is_local(backend, base_url=None):
@@ -31,8 +53,7 @@ def is_local(backend, base_url=None):
     if backend in LOCAL_BACKENDS:
         return True
     if backend == "openai":
-        base = (base_url or CFG["openai_base_url"]).lower()
-        return any(h in base for h in ("localhost", "127.0.0.1", "[::1]", "0.0.0.0"))
+        return is_loopback_url(base_url or CFG["openai_base_url"])
     return False
 
 # Subscription command-line agents. Each is run non-interactively with the task as
@@ -54,8 +75,13 @@ def is_local(backend, base_url=None):
 # enumerate the levels. See probe() for how a default is picked from these.
 CLI_TOOLS = {
     "claude": {"label": "Claude Code (Claude Pro / Max subscription)",
-               "argv": ["claude", "-p", "--output-format", "text",
-                        "--allowedTools", "Bash(litsurvey:*)"], "stdin": True,
+               # --tools Bash leaves the shell as the only built-in tool, so Read,
+               # Grep and Glob (allowed without asking by default) are not there
+               # for a hostile abstract to use; the shell is limited to litsurvey.
+               "argv": ["claude", "-p", "--output-format", "text", "--tools", "Bash",
+                        "--allowedTools", ",".join(f"Bash(litsurvey {c}:*)" for c in
+                                                   ("search", "paper", "cites", "refs", "related"))],
+               "stdin": True,
                "model_flag": ("--model", "{v}"), "effort_flag": ("--effort", "{v}"),
                "models": ("fable", "opus", "sonnet", "haiku"), "efforts": ()},
     # codex exec sandboxes the commands it runs: without these it has no network
@@ -65,7 +91,9 @@ CLI_TOOLS = {
               "argv": ["codex", "exec", "--skip-git-repo-check", "-C", "{workdir}",
                        "--sandbox", "workspace-write", "--add-dir", "{datadir}",
                        "-c", "sandbox_workspace_write.network_access=true",
-                       "-o", "{outfile}", "{prompt}"], "stdin": False,
+                       # "-": read the prompt from stdin, so the claim is not visible
+                       # to other accounts in the process list
+                       "-o", "{outfile}", "-"], "stdin": True,
               "model_flag": ("-m", "{v}"), "effort_flag": ("-c", "model_reasoning_effort={v}"),
               "models": (),
               "efforts": ("minimal", "low", "medium", "high", "xhigh", "max")},
@@ -253,11 +281,12 @@ def run_cli(tool, prompt, timeout=1800):
     if not use_stdin:
         argv = [a.replace("{prompt}", prompt) for a in argv]
     try:
-        os.makedirs(DATA_DIR, exist_ok=True)   # a sandboxed agent cannot create it
+        ensure_data_dir()   # a sandboxed agent cannot create it
     except OSError:
         pass
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)   # allow launching Claude Code from inside a Claude Code session
+    env["LITSURVEY_AGENT"] = "1"  # litsurvey then refuses --out, history and nested agents
     try:
         proc = subprocess.run(argv, input=prompt if use_stdin else None, capture_output=True,
                               text=True, timeout=timeout, env=env)
@@ -313,7 +342,7 @@ def resolve(backend=None, model=None, options=None):
         except Exception:  # noqa: BLE001
             if cli_tools_available():
                 backend = "cli"
-            elif CFG["openai_api_key"] or "localhost" in CFG["openai_base_url"]:
+            elif CFG["openai_api_key"] or is_loopback_url(CFG["openai_base_url"]):
                 backend = "openai"
             elif CFG["anthropic_api_key"]:
                 backend = "anthropic"
@@ -342,7 +371,7 @@ def resolve(backend=None, model=None, options=None):
                   file=sys.stderr)
         elif backend == "openai":
             base = (options or {}).get("base_url") or CFG["openai_base_url"]
-            if "localhost" in base or "127.0.0.1" in base:
+            if is_loopback_url(base):
                 try:                      # a local server usually has one loaded model
                     model = openai_models(base)[0]
                 except Exception as e:  # noqa: BLE001

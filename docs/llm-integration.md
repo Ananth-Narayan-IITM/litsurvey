@@ -58,8 +58,8 @@ For `--backend cli`, `--model` names the tool: `claude`, `codex`, `agy`,
 
 | Tool | Command litsurvey runs |
 |---|---|
-| claude | `claude -p --model <model> --effort <effort> --output-format text --allowedTools "Bash(litsurvey:*)"`, prompt on stdin |
-| codex | `codex exec -c model_reasoning_effort=<effort> --skip-git-repo-check --sandbox workspace-write --add-dir ~/.litsurvey -c sandbox_workspace_write.network_access=true -o <tmpfile> "<prompt>"` |
+| claude | `claude -p --model <model> --effort <effort> --output-format text --tools Bash --allowedTools "Bash(litsurvey search:*),Bash(litsurvey paper:*),…"` (the five lookup commands), prompt on stdin |
+| codex | `codex exec -c model_reasoning_effort=<effort> --skip-git-repo-check -C <tmpdir> --sandbox workspace-write --add-dir ~/.litsurvey -c sandbox_workspace_write.network_access=true -o <tmpfile> -`, prompt on stdin |
 | agy | `agy --dangerously-skip-permissions --effort <effort> --output-format text -p "<prompt>"` |
 | gemini | `gemini --yolo -o text -p "<prompt>"` |
 | custom | whatever `cli_command` in the config says; `{prompt}` is substituted, otherwise the prompt is passed on stdin. `{datadir}` and `{outfile}` are substituted too, so a custom command can be given the history directory and a file to write its final message to |

@@ -120,7 +120,7 @@
       <div class="row">
         <label id="optN">Max results<input type="number" id="n" value="15" min="1" max="100" style="width:80px"></label>
         <label id="optYear">From year<input type="number" id="year" placeholder="any" style="width:90px"></label>
-        <label style="flex:1">Output file (optional; extension picks format: .bib .ris .csv .json .md)<input type="text" id="out" placeholder="/absolute/path/results.bib"></label>
+        <span class="muted" style="flex:1;align-self:flex-end">Results can be downloaded as BibTeX, RIS, CSV, JSON or Markdown once the run finishes.</span>
       </div>
     </form>
   </div>
@@ -175,6 +175,14 @@ function llmLocal(){ return llmChoice() === "local"; }
 function chosenBackend(){ const c = llmChoice(); return c==="cli" ? "cli" : (c==="local" ? "ollama" : $("backend").value); }
 function chosenModel(){ return llmChoice()==="cli" ? $("clitool").value : $("model").value; }
 
+// Same rule as backends.is_loopback_url: compare the parsed host name exactly,
+// so that https://localhost.evil.com is not shown as a local model.
+function isLoopback(u){
+  try {
+    const h = new URL(/:\/\//.test(u) ? u : "http://" + u).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    return h==="localhost" || h.endsWith(".localhost") || h==="::1" || h==="0.0.0.0" || /^127\.\d+\.\d+\.\d+$/.test(h);
+  } catch(e){ return false; }
+}
 function refreshForm(){
   const m = mode(); $("inLabel").textContent = LABELS[m];
   const isAgent = AGENT.has(m);
@@ -207,7 +215,7 @@ function refreshForm(){
   } else {
     const be = $("backend").value, has = be==="anthropic" ? CONFIG.anthropic_key : CONFIG.openai_key;
     const baseNow = $("baseurl").value || CONFIG.openai_base_url || "";
-    if (be==="openai" && /localhost|127\.0\.0\.1|\[::1\]/i.test(baseNow)) { p.className="note ok"; p.textContent = `Local OpenAI-compatible server (${baseNow}): your text stays on this machine; only search terms and paper ids go to the scholarly APIs.`; }
+    if (be==="openai" && isLoopback(baseNow)) { p.className="note ok"; p.textContent = `Local OpenAI-compatible server (${baseNow}): your text stays on this machine; only search terms and paper ids go to the scholarly APIs.`; }
     else { p.className="note warn"; p.textContent = `Cloud model (${be}): your claim or question text and every search result will be sent to that provider. Do not use for confidential manuscript content.` + (has ? "" : ` No ${be} API key is configured; run "litsurvey init" or set the environment variable.`); }
   }
   checkUrl();
@@ -332,7 +340,7 @@ async function run(){
   const m = mode(), text = $("text").value.replace(/\s+/g, " ").trim();
   if (!text) { $("text").focus(); return; }
   newQuote();
-  const body = {mode:m, text, n:$("n").value, year_from:$("year").value, backend:AGENT.has(m)?chosenBackend():"", model:AGENT.has(m)?chosenModel():"", rounds:$("rounds").value, out:$("out").value, base_url:(AGENT.has(m)&&chosenBackend()==="openai")?$("baseurl").value.trim():""};
+  const body = {mode:m, text, n:$("n").value, year_from:$("year").value, backend:AGENT.has(m)?chosenBackend():"", model:AGENT.has(m)?chosenModel():"", rounds:$("rounds").value, base_url:(AGENT.has(m)&&chosenBackend()==="openai")?$("baseurl").value.trim():""};
   $("go").disabled = true; $("status").classList.remove("hidden"); $("result").classList.add("hidden");
   $("statusLine").textContent = "Running…"; $("progress").textContent = ""; $("progress").classList.toggle("hidden", !AGENT.has(m));
   let job;

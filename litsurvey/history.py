@@ -1,12 +1,24 @@
 """Run history: ~/.litsurvey/history.jsonl (index) and ~/.litsurvey/runs/<id>.json."""
 import json
 import os
+import re
 import time
 
-from .config import DATA_DIR
+from .config import DATA_DIR, ensure_data_dir, write_private
 
 INDEX = os.path.join(DATA_DIR, "history.jsonl")
 RUNS = os.path.join(DATA_DIR, "runs")
+
+
+RUN_ID = re.compile(r"^\d{8}-\d{6}(-[0-9a-f]{4,12})?-[a-z]+$")
+
+
+def _run_path(run_id):
+    """The file for a run id. Ids are checked against the format new_id() makes,
+    so an id such as "../../.ssh/id_rsa" can never name a file outside RUNS."""
+    if not RUN_ID.match(run_id or ""):
+        raise FileNotFoundError(f"no such run: {run_id!r}")
+    return os.path.join(RUNS, run_id + ".json")
 
 
 def new_id(mode):
@@ -16,15 +28,22 @@ def new_id(mode):
 def record(mode, inputs, papers=None, report=None, log=None, out_file=None,
            stats=None, run_id=None):
     """Save one run. Returns the run id."""
-    os.makedirs(RUNS, exist_ok=True)
+    if os.path.dirname(RUNS) == DATA_DIR:     # tests point RUNS elsewhere
+        ensure_data_dir()
+    os.makedirs(RUNS, mode=0o700, exist_ok=True)
     run_id = run_id or new_id(mode)
     entry = {"id": run_id, "time": time.strftime("%Y-%m-%d %H:%M:%S"), "mode": mode,
              "inputs": inputs, "n_results": len(papers) if papers is not None else None,
              "out_file": out_file or "", "has_report": bool(report)}
-    with open(os.path.join(RUNS, run_id + ".json"), "w", encoding="utf-8") as f:
-        json.dump({**entry, "papers": papers, "report": report, "log": log,
-                   "stats": stats}, f, indent=1, ensure_ascii=False)
-    with open(INDEX, "a", encoding="utf-8") as f:
+    write_private(os.path.join(RUNS, run_id + ".json"),
+                  json.dumps({**entry, "papers": papers, "report": report, "log": log,
+                              "stats": stats}, indent=1, ensure_ascii=False))
+    fd = os.open(INDEX, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.fchmod(fd, 0o600)          # an index from an older version may be 644
+    except (OSError, AttributeError):  # AttributeError: Windows has no fchmod
+        pass
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     return run_id
 
@@ -38,13 +57,13 @@ def list_runs(limit=50):
 
 
 def load(run_id):
-    path = os.path.join(RUNS, run_id + ".json")
+    path = _run_path(run_id)
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
 def delete(run_id):
-    path = os.path.join(RUNS, run_id + ".json")
+    path = _run_path(run_id)
     if os.path.exists(path):
         os.remove(path)
     if os.path.exists(INDEX):

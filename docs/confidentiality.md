@@ -68,12 +68,46 @@ coloured banner before you press Run.
 
 - The instructions to the model say: queries must be short generic keyword
   phrases; never put verbatim sentences, author names or identifying phrasing
-  from a manuscript into a query.
+  from a manuscript into a query. **This is an instruction, not a guarantee.**
+  A model can ignore it, and text inside a search result (an abstract anyone
+  can post on arXiv) can try to talk it out of it.
+- The part that is enforced: with a local model or an API key, litsurvey runs
+  the searches itself and refuses any query that repeats eight or more
+  consecutive words of your input. It cannot catch a paraphrase. With a
+  subscription CLI the agent runs the searches, so this check does not apply.
+- Search results are passed to the model inside marked blocks, and the model
+  is told that nothing inside them is an instruction. This makes injected
+  instructions less likely to work; it does not make them impossible.
 - The model is told to cite only titles, years, venues and DOIs that appeared
   in search results, never from memory. This reduces invented references; it
   does not make them impossible. Check DOIs before using them.
 - Tool results sent to the model are capped in size, and the round limit
   bounds how many queries a run can make.
+
+## Subscription CLI agents and hostile text
+
+With `--backend cli` the vendor's agent reads search results and has a shell.
+An abstract written to manipulate it could ask it to run other commands.
+How far that could go depends on the tool:
+
+- **Claude Code** is started with only its shell tool (`--tools Bash`), and
+  the shell may run only `litsurvey search`, `paper`, `cites`, `refs` and
+  `related`. In tests against Claude Code it could not read a file, chain
+  another command, use command substitution or expand an environment
+  variable; each was refused or held for an approval that never comes in
+  non-interactive mode.
+- **Codex CLI** runs in an empty temporary directory under a write sandbox,
+  but its shell can read files and reach the network.
+- **Gemini CLI and Antigravity** run with all approvals turned on (`--yolo`,
+  `--dangerously-skip-permissions`), because they have no way to allow only
+  one command. Their shell can do anything your account can.
+
+For every agent, `litsurvey` itself also refuses `--out`, `history`, `init`,
+`web` and the agent commands when an agent started it (litsurvey sets an
+environment variable for this), so the tool cannot be used to write files or
+to read other files through the history. The prompt tells every agent that
+search output is data and never an instruction. For work where this risk
+matters, use a local model.
 
 ## What you should do
 
@@ -92,6 +126,9 @@ coloured banner before you press Run.
 
 ## Where litsurvey stores data
 
+- `~/.litsurvey/` itself is readable by your account only (mode 700), and
+  the files litsurvey writes in it are mode 600, so other accounts on a
+  shared machine cannot read your claims or reports.
 - `~/.litsurvey/config.json`: your API key and settings (file mode 600).
 - `~/.litsurvey/history.jsonl` and `~/.litsurvey/runs/`: every completed run's inputs
   and results, so the web page's History tab and `litsurvey history` can

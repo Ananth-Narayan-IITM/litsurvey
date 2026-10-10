@@ -362,9 +362,33 @@ def build_parser():
     return ap
 
 
+# Set by backends.run_cli for the subscription agents it starts. Their shell may
+# be steered by text in a search result, so when it is set litsurvey offers
+# only the read-only lookups the agent needs: no files written with --out, no
+# history (which could otherwise be pointed at other files), no nested agents.
+AGENT_ENV = "LITSURVEY_AGENT"
+AGENT_COMMANDS = ("search", "paper", "cites", "refs", "related", "oa")
+
+
+def _agent_refusal(args):
+    if not os.environ.get(AGENT_ENV):
+        return None
+    if args.cmd not in AGENT_COMMANDS:
+        return (f"`litsurvey {args.cmd}` is not available to an agent; "
+                f"use one of: {', '.join(AGENT_COMMANDS)}")
+    if getattr(args, "out", None):
+        return "--out is not available to an agent; print the results instead"
+    return None
+
+
 def main(argv=None):
     ap = build_parser()
     args = ap.parse_args(argv)
+    config.tighten_data_dir()
+    refusal = _agent_refusal(args)
+    if refusal:
+        print(f"error: {refusal}", file=sys.stderr)
+        sys.exit(2)
     if args.debug:
         http.DEBUG = True
     if getattr(args, "action", None) in ("show", "export", "delete") and not args.run_id:
