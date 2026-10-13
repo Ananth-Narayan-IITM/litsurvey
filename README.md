@@ -73,6 +73,12 @@ It opens `http://127.0.0.1:8765` in your browser, serves only to your own
 machine, and needs no configuration to start searching. The rest of this
 page shows the command-line equivalents.
 
+To let a coding agent (Claude Code, Codex and others) use litsurvey as a
+tool, add the skill file in `integrations/`, or install it from its free
+listing on [Agensi](https://agensi.io/skills/litsurvey-scientific-literature-search-and-prior-art-checks). Either way the skill only tells the agent how to
+call `litsurvey`, so the package above must be installed first. See
+[docs/llm-integration.md](https://github.com/udaykdk/litsurvey/blob/main/docs/llm-integration.md).
+
 ### The Semantic Scholar key (free, and in practice needed)
 
 Only one of the seven default sources needs a key at all. Semantic Scholar

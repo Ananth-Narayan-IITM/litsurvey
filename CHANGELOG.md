@@ -6,6 +6,10 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- The skill is listed free on Agensi (https://agensi.io/skills/litsurvey-scientific-literature-search-and-prior-art-checks); the README and
+  `docs/llm-integration.md` point to it.
+
 ### Changed
 - The Claude Code skill (`integrations/claude-code/litsurvey/SKILL.md`) now
   opens with the install step and links, so it works when distributed on its

@@ -260,7 +260,11 @@ cp -r integrations/claude-code/litsurvey ~/.claude/skills/
 ```
 
 (Or into a project's `.claude/skills/` to enable it for that project only.)
-From then on, in any Claude Code session, questions such as *"has anyone
+The same skill is listed free on Agensi, a marketplace for agent skills that
+installs into Claude Code, Cursor, Copilot and others:
+https://agensi.io/skills/litsurvey-scientific-literature-search-and-prior-art-checks. The listing is the
+file in this repository and is updated with it; it still needs
+`pipx install litsurvey` first. From then on, in any Claude Code session, questions such as *"has anyone
 published X?"* or *"find recent papers on Y"* make Claude run litsurvey,
 read the results and answer with DOIs. `/litsurvey` invokes it explicitly.
 
