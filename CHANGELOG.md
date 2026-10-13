@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- The Claude Code skill (`integrations/claude-code/litsurvey/SKILL.md`) now
+  opens with the install step and links, so it works when distributed on its
+  own (for example on a skills marketplace), and no longer describes the
+  agent commands as local-only.
+
 ## [1.2.0] - 2026-10-10
 
 Most of these were found by Anant Goyal in the same review as the 1.1.1
