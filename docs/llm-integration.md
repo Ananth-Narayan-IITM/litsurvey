@@ -157,9 +157,12 @@ Things to know:
 - Your claim or question and everything the agent reads go to that vendor
   under your subscription's terms. This is not the option for confidential
   manuscripts; use option 2.
-- There is no progress display while the agent works; a run typically takes
-  one to five minutes. The `[agent]` line at the start says which tool is
-  running.
+- There is no progress display while the agent works. A `novelty` run
+  usually takes a few minutes; a broad `research` question can take more
+  than half an hour. The `[agent]` lines at the start say which tool is
+  running and the time limit (30 minutes unless changed with `--timeout` or
+  `agent_timeout`; see [cli.md](cli.md)). At the limit the agent is stopped
+  without a report, but the searches it ran are kept.
 - Codex CLI's flags move between releases. The command above is what works
   on codex-cli 0.153.4; `--full-auto`, which earlier versions of litsurvey
   used, no longer exists and makes `codex exec` fail outright. If your codex

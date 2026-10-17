@@ -27,6 +27,9 @@ def _add_agent_opts(p):
     p.add_argument("--base-url", metavar="URL",
                    help="for --backend openai: the API root, e.g. https://openrouter.ai/api or http://localhost:1234")
     p.add_argument("--rounds", type=int, default=8, help="max tool-calling rounds (default 8)")
+    p.add_argument("--timeout", type=float, metavar="MIN",
+                   help="time limit for this run in minutes; 0 for none (default: agent_timeout "
+                        "from the config, else 30)")
     p.add_argument("--out", metavar="FILE", help="save the report as markdown (+ FILE.log.json)")
     p.add_argument("--no-log", action="store_true", help="omit the search-log appendix")
 
@@ -99,13 +102,15 @@ def cmd_oa(args):
 def cmd_agent_mode(mode):
     def run(args):
         params = {"text": args.text, "backend": args.backend, "model": args.model,
-                  "rounds": args.rounds, "base_url": args.base_url}
+                  "rounds": args.rounds, "base_url": args.base_url, "timeout": args.timeout}
         result = ops.run_mode(mode, params)
         print(result["report"])
         run_id, written = ops.save(mode, params, result, out=args.out, with_log=not args.no_log)
         for w in written:
             print(f"[saved] {w}", file=sys.stderr)
         print(f"[run] {run_id}", file=sys.stderr)
+        if result.get("incomplete"):          # saved, but there is no report: tell scripts
+            sys.exit(3)
     return run
 
 
@@ -213,6 +218,18 @@ def cmd_init(args):
         k = getpass.getpass("Anthropic API key: ").strip()
         if k:
             vals["anthropic_api_key"] = k
+    cur_limit = cur["agent_timeout"] or str(backends.DEFAULT_AGENT_MINUTES)
+    while True:
+        t = input(f"time limit for one novelty/research run, in minutes (0 = no limit) [{cur_limit}]: ").strip()
+        if not t:
+            break
+        try:
+            backends.agent_minutes(t)
+        except ValueError as e:
+            print(f"  {e}")
+            continue
+        vals["agent_timeout"] = t
+        break
     path = config.save(vals)
     print(f"\nwritten to {path}. Run `litsurvey doctor` to check.")
 
@@ -260,6 +277,13 @@ def cmd_doctor(args):
     print(f"subscr. CLIs : {', '.join(found) if found else 'none found'} (claude / codex / agy / gemini on PATH)")
     print(f"openai       : {'key set' if cfg['openai_api_key'] else 'no key'}, base {cfg['openai_base_url']}")
     print(f"anthropic    : {'key set' if cfg['anthropic_api_key'] else 'no key'}")
+    bad_setting = ""
+    try:
+        print(f"time limit   : {backends.describe_minutes(backends.agent_minutes())} per "
+              f"novelty/research run (agent_timeout; --timeout per run)")
+    except ValueError as e:
+        bad_setting = str(e)
+        print(f"time limit   : INVALID: {e}")
     agent_line = None
     try:
         be, model = backends.resolve()
@@ -278,7 +302,12 @@ def cmd_doctor(args):
     print()
     print("(doctor does not test Unpaywall, and does not make an LLM call; it only detects backends.)")
     tail = f" Minor sources failed: {', '.join(warnings)}; searches still work without them." if warnings else ""
-    if not ok:
+    if bad_setting:
+        print(f"RESULT: PROBLEMS. A setting is invalid: {bad_setting}. Fix it in "
+              f"{config.CONFIG_PATH} or the environment, or run `litsurvey init`."
+              + ("" if ok else " A core source also failed (see FAIL lines above)."))
+        ok = False
+    elif not ok:
         print("RESULT: PROBLEMS. A core source failed (see FAIL lines above); "
               "search results will be incomplete. Check your network, then `litsurvey doctor --debug`.")
     elif agent_line:

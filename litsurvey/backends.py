@@ -109,6 +109,43 @@ CLI_TOOLS = {
 }
 
 
+# ------------------------------------------------------------- time limits
+
+DEFAULT_AGENT_MINUTES = 30   # a whole novelty/research run
+REPLY_MINUTES = 15           # floor for one model reply (Ollama / API key backends)
+
+
+class AgentTimeout(RuntimeError):
+    """A subscription CLI agent was stopped at the time limit."""
+
+
+def agent_minutes(override=None):
+    """Minutes an agent run may take: the --timeout given for this run, else
+    agent_timeout from the config or LITSURVEY_AGENT_TIMEOUT, else 30.
+    0 means no limit."""
+    raw = override if override not in (None, "") else CFG.get("agent_timeout")
+    if raw in (None, ""):
+        return DEFAULT_AGENT_MINUTES
+    try:
+        minutes = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"agent_timeout must be a number of minutes (0 for no limit), "
+                         f"not {raw!r}") from None
+    if minutes < 0:
+        raise ValueError("agent_timeout cannot be negative; use 0 for no limit")
+    return minutes
+
+
+def reply_seconds(minutes):
+    """How long to wait for one model reply: at least REPLY_MINUTES, longer when
+    the run's limit is longer, and no limit when the run has none."""
+    return None if not minutes else max(REPLY_MINUTES, minutes) * 60
+
+
+def describe_minutes(minutes):
+    return "no limit" if not minutes else f"{minutes:g} min"
+
+
 def split_command(cmd):
     """Split a command line into argv. On Windows, POSIX splitting would strip
     the backslashes from paths, so split in non-POSIX mode and unquote tokens."""
@@ -264,8 +301,9 @@ def cli_command(tool):
     return argv, spec["stdin"]
 
 
-def run_cli(tool, prompt, timeout=1800, agent_token=None):
+def run_cli(tool, prompt, timeout=DEFAULT_AGENT_MINUTES * 60, agent_token=None):
     """Hand the whole task to a subscription CLI agent; return its final text.
+    timeout is in seconds, None for no limit; reaching it raises AgentTimeout.
     agent_token marks the litsurvey runs the agent makes, so the search log can
     tell them from runs the user makes by hand at the same time."""
     argv, use_stdin = cli_command(tool)
@@ -296,7 +334,7 @@ def run_cli(tool, prompt, timeout=1800, agent_token=None):
     except FileNotFoundError:
         raise RuntimeError(f"could not start {argv[0]!r}") from None
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"{tool} did not finish within {timeout} s") from None
+        raise AgentTimeout(f"{tool} did not finish within {timeout / 60:g} minutes") from None
     finally:
         final = ""
         if outfile:
@@ -391,13 +429,16 @@ def resolve(backend=None, model=None, options=None):
 # ------------------------------------------------------------- chat
 
 def chat(backend, model, messages, tools=None, options=None):
-    """options (optional): {"base_url": ..., "api_key": ...} overrides for the openai backend."""
+    """options (optional): {"base_url", "api_key"} for the openai backend, and
+    "reply_timeout" (seconds, None for no limit) for any backend."""
+    options = options or {}
+    timeout = options.get("reply_timeout", REPLY_MINUTES * 60)
     if backend == "ollama":
-        return _chat_ollama(model, messages, tools)
+        return _chat_ollama(model, messages, tools, timeout)
     if backend == "openai":
-        return _chat_openai(model, messages, tools, options or {})
+        return _chat_openai(model, messages, tools, options, timeout)
     if backend == "anthropic":
-        return _chat_anthropic(model, messages, tools)
+        return _chat_anthropic(model, messages, tools, timeout)
     raise RuntimeError(f"unknown backend {backend!r}")
 
 
@@ -439,7 +480,7 @@ CUT_OFF_NOTE = ("\n\n> **litsurvey note:** the model stopped because it reached 
                 "replies, or ask a narrower question.")
 
 
-def _chat_ollama(model, messages, tools):
+def _chat_ollama(model, messages, tools, timeout=REPLY_MINUTES * 60):
     conv = []
     for m in messages:
         if m["role"] == "assistant":
@@ -456,7 +497,7 @@ def _chat_ollama(model, messages, tools):
         payload["options"] = {"num_ctx": ctx}
     if tools:
         payload["tools"] = [{"type": "function", "function": t} for t in tools]
-    resp = http.post_json(CFG["ollama_host"] + "/api/chat", payload)
+    resp = http.post_json(CFG["ollama_host"] + "/api/chat", payload, timeout=timeout)
     msg = resp.get("message") or {}
     calls = [{"id": uuid.uuid4().hex[:12], "name": c["function"]["name"],
               "args": _parse_args(c["function"].get("arguments"))}
@@ -467,7 +508,7 @@ def _chat_ollama(model, messages, tools):
     return {"content": content, "tool_calls": calls}
 
 
-def _chat_openai(model, messages, tools, options=None):
+def _chat_openai(model, messages, tools, options=None, timeout=REPLY_MINUTES * 60):
     options = options or {}
     base = (options.get("base_url") or CFG["openai_base_url"]).rstrip("/")
     api_key = options.get("api_key") or CFG["openai_api_key"]
@@ -495,7 +536,7 @@ def _chat_openai(model, messages, tools, options=None):
     if "openrouter.ai" in base:            # optional attribution headers OpenRouter asks for
         hdrs["HTTP-Referer"] = "https://github.com/udaykdk/litsurvey"
         hdrs["X-Title"] = "litsurvey"
-    resp = http.post_json(base + "/v1/chat/completions", payload, headers=hdrs)
+    resp = http.post_json(base + "/v1/chat/completions", payload, headers=hdrs, timeout=timeout)
     choice = (resp.get("choices") or [{}])[0]
     msg = choice.get("message") or {}
     calls = [{"id": c.get("id") or uuid.uuid4().hex[:12], "name": c["function"]["name"],
@@ -507,7 +548,7 @@ def _chat_openai(model, messages, tools, options=None):
     return {"content": content, "tool_calls": calls}
 
 
-def _chat_anthropic(model, messages, tools):
+def _chat_anthropic(model, messages, tools, timeout=REPLY_MINUTES * 60):
     system = ""
     conv = []
     pending_results = []
@@ -541,7 +582,8 @@ def _chat_anthropic(model, messages, tools):
         payload["tools"] = [{"name": t["name"], "description": t["description"],
                              "input_schema": t["parameters"]} for t in tools]
     hdrs = {"x-api-key": CFG["anthropic_api_key"], "anthropic-version": "2023-06-01"}
-    resp = http.post_json("https://api.anthropic.com/v1/messages", payload, headers=hdrs)
+    resp = http.post_json("https://api.anthropic.com/v1/messages", payload, headers=hdrs,
+                          timeout=timeout)
     text, calls = [], []
     for b in resp.get("content") or []:
         if b.get("type") == "text":

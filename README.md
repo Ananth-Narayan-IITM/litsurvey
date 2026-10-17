@@ -156,7 +156,9 @@ asks; scripts and agents get the list and use `--pick N`.
 
 Typical times: a search takes roughly ten to twenty seconds, since the
 sources are queried one after another at the rate limits they ask for;
-`novelty` and `research` take two to fifteen minutes depending on the model.
+`novelty` and `research` take two to fifteen minutes depending on the model,
+sometimes longer. They stop at 30 minutes unless you raise the limit with
+`--timeout` or the `agent_timeout` setting.
 
 ## What needs an LLM, and what leaves your machine
 

@@ -142,8 +142,8 @@ pdf : https://arxiv.org/pdf/2111.02801
 ## novelty and research
 
 ```bash
-litsurvey novelty  "CLAIM"    [--backend B] [--model M] [--rounds N] [--out FILE.md] [--no-log]
-litsurvey research "QUESTION" [--backend B] [--model M] [--rounds N] [--out FILE.md] [--no-log]
+litsurvey novelty  "CLAIM"    [--backend B] [--model M] [--rounds N] [--timeout MIN] [--out FILE.md] [--no-log]
+litsurvey research "QUESTION" [--backend B] [--model M] [--rounds N] [--timeout MIN] [--out FILE.md] [--no-log]
 ```
 
 These need an LLM backend: `--backend cli` (your Claude Code / Codex /
@@ -163,6 +163,21 @@ subscription-CLI backend works from abstracts only.
   `novelty`, 12 for `research`). Each round is one model call that may
   contain several tool calls. When the cap is reached the model is told to
   stop and write.
+- `--timeout MIN` sets the time limit for this run in minutes; `0` means no
+  limit. Without it, `agent_timeout` from `~/.litsurvey/config.json` (or
+  `LITSURVEY_AGENT_TIMEOUT`) applies, and without that, 30 minutes.
+  `litsurvey init` asks for it and `litsurvey doctor` shows it. What happens
+  at the limit depends on the backend:
+  - with a local model or an API key, the agent stops searching and still
+    writes its report from what it has found, with a note that it was cut
+    short;
+  - a subscription CLI agent (Claude Code, Codex, ...) is stopped, and since
+    these tools print only at the end, there is no report. The searches it
+    ran are kept in the search log and the history, and the command exits
+    with code 3.
+
+  A single model reply may take up to 15 minutes, or as long as the run's
+  limit when that is longer.
 - `--out FILE.md` saves the report, appends a **Search log** table (every
   query, its time and hit counts per source), and writes `FILE.log.json` with
   the same log for scripts. `--no-log` omits the appendix.
@@ -173,7 +188,8 @@ State the input as a generic topic. Words from it become search queries;
 see [confidentiality.md](confidentiality.md).
 
 Typical duration: 2 to 15 minutes on a local 30B model; under a minute on a
-fast cloud model.
+fast cloud model; with a subscription CLI a broad `research` question can
+take more than half an hour, so raise `--timeout` for those.
 
 ## history
 
