@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+- An OpenAI-compatible base URL that already ends in `/v1` (for example
+  `https://api.goedelmachines.com/v1`) produced `/v1/v1/chat/completions` and a
+  404. The version segment is now added only when the base does not carry it,
+  for both the chat and the model-listing endpoints.
+- The User-Agent now includes the configured contact email
+  (`openalex_mailto`), which arXiv asks automated clients to provide so they
+  can reach the operator instead of blocking the address; the full-text hosts
+  `arxiv.org` and `ar5iv.labs.arxiv.org` are also rate-limited now.
+
 ### Added
 - The skill is listed free on Agensi (https://agensi.io/skills/litsurvey-scientific-literature-search-and-prior-art-checks); the README and
   `docs/llm-integration.md` point to it.

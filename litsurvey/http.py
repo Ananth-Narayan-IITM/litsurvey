@@ -9,14 +9,27 @@ import urllib.parse
 import urllib.request
 
 from . import __version__
-from .config import DATA_DIR, ensure_data_dir
+from .config import CFG, DATA_DIR, ensure_data_dir
 
-USER_AGENT = f"litsurvey/{__version__} (https://github.com/udaykdk/litsurvey)"
+
+def _user_agent():
+    """arXiv (and others) ask automated clients to identify themselves with a
+    contact address so they can reach the operator instead of blocking the IP.
+    The email configured for OpenAlex's polite pool is reused for this."""
+    contact = (CFG.get("openalex_mailto") or "").strip()
+    if "@" in contact:
+        return f"litsurvey/{__version__} (mailto:{contact})"
+    return f"litsurvey/{__version__} (https://github.com/udaykdk/litsurvey)"
+
+
+USER_AGENT = _user_agent()
 
 # minimum seconds between requests to a host, per the providers' published limits
 HOST_INTERVAL = {
     "api.semanticscholar.org": 1.1,   # 1 request/second with a key; shared pool without
     "export.arxiv.org": 3.0,          # arXiv asks for 3 s between requests
+    "arxiv.org": 3.0,                 # full-text HTML reads share arXiv's limit
+    "ar5iv.labs.arxiv.org": 3.0,     # the full-text mirror, same courtesy
     "api.openalex.org": 0.15,
     "api.unpaywall.org": 0.2,
     "api.crossref.org": 0.2,
