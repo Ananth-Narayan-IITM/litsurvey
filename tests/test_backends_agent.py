@@ -176,6 +176,18 @@ def test_openai_base_url_may_include_v1(monkeypatch):
         "https://api.openai.com/v1/models"
 
 
+def test_openai_models_accepts_v1_base(monkeypatch):
+    seen = {}
+
+    def get_json(url, headers=None, timeout=5):
+        seen["url"] = url
+        return {"data": [{"id": "m"}]}
+    monkeypatch.setattr(backends.http, "get_json", get_json)
+    monkeypatch.setitem(backends.CFG, "openai_api_key", "")
+    assert backends.openai_models("https://api.goedelmachines.com/v1") == ["m"]
+    assert seen["url"] == "https://api.goedelmachines.com/v1/models"
+
+
 def test_hosted_openai_requires_a_model(monkeypatch):
     for k in ("model",):
         monkeypatch.setitem(backends.CFG, k, "")
