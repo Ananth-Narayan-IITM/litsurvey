@@ -5,7 +5,6 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
-
 ### Fixed
 - An OpenAI-compatible base URL that already ends in `/v1` (for example
   `https://api.goedelmachines.com/v1`) produced `/v1/v1/chat/completions` and a
@@ -16,10 +15,28 @@ All notable changes to this project are documented here. The format follows
   reach the operator instead of blocking the address. It is sent only to
   arXiv; the full-text hosts `arxiv.org` and `ar5iv.labs.arxiv.org` are
   also rate-limited now.
-
+  
+## [1.2.1] - 2026-10-17
 ### Added
-- The skill is listed free on Agensi (https://agensi.io/skills/litsurvey-scientific-literature-search-and-prior-art-checks); the README and
-  `docs/llm-integration.md` point to it.
+- **A time limit you can set for `novelty` and `research`.** It was fixed at
+  30 minutes for the subscription CLI backends, with no way to change it.
+  Now `--timeout MINUTES` sets it for one run, and `agent_timeout` in the
+  config (or `LITSURVEY_AGENT_TIMEOUT`) for every run; `0` means no limit.
+  The default stays 30 minutes. `litsurvey init` asks for it and
+  `litsurvey doctor` shows it, and reports an invalid value as a problem.
+- The limit now also applies with a local model or an API key, where there
+  was none: at the limit the agent stops searching and writes its report from
+  what it has, with a note saying so. The wait for a single model reply,
+  fixed at 15 minutes before, grows with the run's limit.
+- The skill is listed free on Agensi
+  (https://agensi.io/skills/litsurvey-scientific-literature-search-and-prior-art-checks);
+  the README and `docs/llm-integration.md` point to it.
+
+### Fixed
+- When a subscription CLI agent ran out of time, the run ended in a bare
+  error, with no record of which searches the agent had made. Now the run is
+  saved with the agent's search log, the message says how to raise the
+  limit, and the command exits with code 3 so scripts can tell.
 
 ### Changed
 - The Claude Code skill (`integrations/claude-code/litsurvey/SKILL.md`) now

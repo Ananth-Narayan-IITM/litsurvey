@@ -589,3 +589,88 @@ def test_untagged_runs_are_not_counted_as_the_agents(monkeypatch):
     monkeypatch.setattr(backends, "run_cli", user_searches_meanwhile)
     res = agent.run("novelty", "claim", backend="cli", progress=lambda s: None)
     assert res["log"] == [] and "did not appear" in res["report"]
+
+
+@pytest.mark.parametrize("override,config,expected", [
+    (None, "", 30), (None, "45", 45), (None, "0", 0), ("90", "45", 90), (0.5, "", 0.5)])
+def test_agent_time_limit_comes_from_flag_then_config_then_default(monkeypatch, override, config, expected):
+    monkeypatch.setitem(backends.CFG, "agent_timeout", config)
+    assert backends.agent_minutes(override) == expected
+
+
+@pytest.mark.parametrize("bad", ["ten", "-5"])
+def test_a_bad_time_limit_is_reported(monkeypatch, bad):
+    monkeypatch.setitem(backends.CFG, "agent_timeout", bad)
+    with pytest.raises(ValueError, match="agent_timeout"):
+        backends.agent_minutes()
+
+
+def test_reply_wait_follows_the_run_limit():
+    assert backends.reply_seconds(30) == 30 * 60
+    assert backends.reply_seconds(5) == backends.REPLY_MINUTES * 60     # never below the floor
+    assert backends.reply_seconds(0) is None                            # no limit at all
+
+
+def test_a_cli_agent_that_overruns_is_stopped_and_its_searches_kept(monkeypatch):
+    script = "import time; time.sleep(30); print('too late')"
+    monkeypatch.setitem(backends.CFG, "cli_command", f"{sys.executable} -c \"{script}\"")
+    monkeypatch.setitem(backends.CFG, "backend", "cli")
+    monkeypatch.setitem(backends.CFG, "cli_tool", "custom")
+    real = backends.run_cli
+    seen = {}
+
+    def agent_searches_then_hangs(tool, prompt, timeout=1800, agent_token=None):
+        seen["timeout"] = timeout
+        monkeypatch.setenv("LITSURVEY_AGENT", agent_token)
+        history.record("search", {"text": "kan pinn"}, papers=[], stats={"openalex": 3})
+        monkeypatch.delenv("LITSURVEY_AGENT")
+        return real(tool, prompt, timeout, agent_token)
+    monkeypatch.setattr(backends, "run_cli", agent_searches_then_hangs)
+    res = agent.run("research", "a question", backend="cli", timeout=0.02, progress=lambda s: None)
+    assert seen["timeout"] == pytest.approx(1.2)                  # 0.02 min
+    assert res["incomplete"] is True and "did not finish in time" in res["report"]
+    assert "--timeout" in res["report"] and "agent_timeout" in res["report"]
+    assert [e["args"] for e in res["log"]] == [{"query": "kan pinn"}]   # the searches survive
+
+
+def test_no_limit_means_no_subprocess_timeout(monkeypatch):
+    seen = {}
+
+    class Proc:
+        returncode, stdout, stderr = 0, "report", ""
+
+    def fake_run(argv, **kw):
+        seen["timeout"] = kw.get("timeout")
+        return Proc()
+    monkeypatch.setattr(backends, "cli_command", lambda tool: (["x", "{prompt}"], False))
+    monkeypatch.setattr(backends.subprocess, "run", fake_run)
+    backends.run_cli("x", "task", timeout=None)
+    assert seen["timeout"] is None
+
+
+def test_builtin_loop_stops_searching_at_the_limit_and_still_reports(monkeypatch):
+    clock = iter([0, 0, 10_000, 10_000, 10_000, 10_000, 10_000])
+    monkeypatch.setattr(agent.time, "time", lambda: next(clock, 10_000))
+    calls = []
+
+    def fake_chat(backend, model, messages, tools=None, options=None):
+        calls.append(options.get("reply_timeout"))
+        if tools:
+            return {"content": "", "tool_calls": [{"id": "1", "name": "search_papers", "args": {"query": "kan"}}]}
+        return {"content": "## Report", "tool_calls": []}
+    monkeypatch.setattr(backends, "resolve", lambda *a: ("ollama", "m"))
+    monkeypatch.setattr(backends, "chat", fake_chat)
+    monkeypatch.setattr(agent, "run_search", lambda *a, **k: ([], {}))
+    res = agent.run("research", "q", rounds=8, timeout=1, progress=lambda s: None)
+    assert res["time_limited"] is True and res["report"].startswith("## Report")
+    assert "time limit" in res["report"] and len(res["log"]) == 1
+    assert calls[0] == backends.REPLY_MINUTES * 60
+
+
+def test_cli_exits_3_when_the_agent_produced_no_report(monkeypatch, capsys):
+    from litsurvey import cli, ops
+    monkeypatch.setattr(ops, "run_mode", lambda mode, params, progress=None:
+                        {"report": "## No report", "log": [], "incomplete": True})
+    with pytest.raises(SystemExit) as e:
+        cli.main(["research", "q", "--timeout", "1"])
+    assert e.value.code == 3 and "## No report" in capsys.readouterr().out

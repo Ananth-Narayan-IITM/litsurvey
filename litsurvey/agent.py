@@ -221,24 +221,44 @@ def dispatch(name, args, log, guard_text=None):
         return {"error": str(e)}
 
 
-def run(kind, text, backend=None, model=None, rounds=8, progress=None, options=None):
+def _limit_hint(minutes):
+    return (f"The limit was {backends.describe_minutes(minutes)}. Raise it for one run with "
+            f"`--timeout MINUTES` (0 for no limit), or for every run with `agent_timeout` in "
+            f"~/.litsurvey/config.json (`litsurvey init` asks for it) or LITSURVEY_AGENT_TIMEOUT.")
+
+
+def run(kind, text, backend=None, model=None, rounds=8, progress=None, options=None,
+        timeout=None):
     """Run the agent. Returns {"report", "log", "backend", "model", "rounds_used"}.
-    options: e.g. {"base_url": "https://openrouter.ai/api"} for the openai backend."""
+    At the time limit the built-in loop stops searching and still writes its
+    report ("time_limited": True); a subscription CLI agent is stopped without
+    a report ("incomplete": True), but its search log is kept.
+    options: e.g. {"base_url": "https://openrouter.ai/api"} for the openai backend.
+    timeout: minutes for the whole run (None: the configured limit; 0: none)."""
     if kind not in KINDS:
         raise ValueError(f"kind must be one of {list(KINDS)}")
     system, user_tmpl, kind_name = KINDS[kind]
+    minutes = backends.agent_minutes(timeout)
     backend, model = backends.resolve(backend, model, options)
     say = progress or (lambda s: print(s, file=sys.stderr))
+    say(f"[agent] time limit: {backends.describe_minutes(minutes)}")
     if backend == "cli":
-        return _run_cli(kind, text, model, rounds, say)
+        return _run_cli(kind, text, model, rounds, say, minutes)
+    options = dict(options or {}, reply_timeout=backends.reply_seconds(minutes))
+    deadline = time.time() + minutes * 60 if minutes else None
     local = backends.is_local(backend, (options or {}).get("base_url"))
     say(f"[agent] backend={backend} model={model} "
         f"({'local model; only search terms and paper ids go to the scholarly APIs' if local else 'CLOUD backend: the text below and all search results are sent to the provider'})")
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": user_tmpl.format(text=text)
                  + f"\n\nToday's year is {time.localtime().tm_year}. Begin searching."}]
-    log, final, used = [], None, 0
+    log, final, used, out_of_time = [], None, 0, False
     for step in range(rounds):
+        if deadline and time.time() > deadline:
+            out_of_time = True
+            say(f"[agent] time limit of {backends.describe_minutes(minutes)} reached after "
+                f"{step} rounds; writing the report from the searches done so far")
+            break
         used = step + 1
         say(f"[agent] thinking… (round {used}/{rounds})")
         reply = backends.chat(backend, model, messages, tools=TOOLS, options=options)
@@ -255,20 +275,27 @@ def run(kind, text, backend=None, model=None, rounds=8, progress=None, options=N
             messages.append({"role": "tool", "tool_call_id": call["id"], "name": call["name"],
                              "content": "<search_results>\n" + body + "\n</search_results>"})
     if final is None:
-        say("[agent] round limit reached, requesting final report")
+        if not out_of_time:
+            say("[agent] round limit reached, requesting final report")
         messages.append({"role": "user", "content":
                          f"Stop searching. Write the final {kind_name} now, based on everything found so far."})
         final = backends.chat(backend, model, messages, options=options)["content"]
-    final = (final or "") + citation_note(final, log)
+    final = final or ""
+    if out_of_time:
+        # The report is complete, only the search was cut short: say so in it.
+        final += (f"\n\n> **litsurvey note:** the agent stopped searching at its time limit "
+                  f"after {len(log)} searches and lookups, so coverage may be thinner than usual. "
+                  + _limit_hint(minutes) + "\n")
+    final += citation_note(final, log)
     return {"report": final, "log": log, "backend": backend, "model": model,
-            "rounds_used": used}
+            "rounds_used": used, "time_limited": out_of_time}
 
 
 _CLI_MODE_TOOL = {"search": "search_papers", "cites": "get_citations", "refs": "get_references",
                   "related": "get_related", "oa": "open_access", "paper": "paper"}
 
 
-def _run_cli(kind, text, tool, rounds, say):
+def _run_cli(kind, text, tool, rounds, say, minutes=backends.DEFAULT_AGENT_MINUTES):
     """Delegate the whole task to a subscription CLI agent (Claude Code, Codex, Antigravity, Gemini)."""
     system, user_tmpl, kind_name = KINDS[kind]
     cli_model, cli_effort = backends.cli_defaults(tool)
@@ -287,7 +314,19 @@ def _run_cli(kind, text, tool, rounds, say):
         f"until it finishes. Its litsurvey commands will appear in the search log.")
     start = time.time()
     token = uuid.uuid4().hex[:12]
-    report = backends.run_cli(tool, prompt, agent_token=token)
+    incomplete = False
+    try:
+        report = backends.run_cli(tool, prompt, timeout=minutes * 60 if minutes else None,
+                                  agent_token=token)
+    except backends.AgentTimeout as e:
+        # The agent's own draft is lost with it (these tools print only at the
+        # end), but the searches it ran are in the history: keep them.
+        incomplete = True
+        say(f"[agent] {e}; saving the searches it ran")
+        report = (f"## No report: {tool} did not finish in time\n\n"
+                  f"{tool} was stopped after {(time.time() - start) / 60:.0f} minutes, before it "
+                  f"wrote its report. The searches it had run are listed in the search log "
+                  f"below and are kept in the history.\n\n" + _limit_hint(minutes) + "\n")
     # Only the agent's own runs carry its token; a search the user ran by hand
     # in the meantime does not, and must not count as something the agent saw.
     tagged = [r for r in history.runs_since(start - 1)
@@ -309,10 +348,14 @@ def _run_cli(kind, text, tool, rounds, say):
         except OSError:
             pass
         log.append(entry)
-    report += citation_note(report, log)
+    if not incomplete:
+        report += citation_note(report, log)
     say(f"[agent] {tool} finished; {len(log)} litsurvey commands recorded")
     label = tool + (f" ({detail})" if detail else "")
-    return {"report": report, "log": log, "backend": "cli", "model": label, "rounds_used": None}
+    out = {"report": report, "log": log, "backend": "cli", "model": label, "rounds_used": None}
+    if incomplete:
+        out["incomplete"] = True
+    return out
 
 
 def search_log_markdown(log, backend=None, model=None):

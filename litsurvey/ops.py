@@ -76,7 +76,7 @@ def run_mode(mode, params, progress=None):
         options = {"base_url": params["base_url"]} if params.get("base_url") else None
         return agent.run(mode, text, backend=params.get("backend"),
                          model=params.get("model"), rounds=int(params.get("rounds") or 8),
-                         progress=progress, options=options)
+                         progress=progress, options=options, timeout=params.get("timeout"))
     raise ValueError(f"unknown mode {mode!r}")
 
 

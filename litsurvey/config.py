@@ -14,6 +14,7 @@ Keys (all optional):
   cli_model         model the subscription CLI should use; "-" means the tool's own default
   cli_effort        reasoning effort for the subscription CLI; "-" means the tool's own default
   update_check      "false" stops the web page asking pypi.org (once a day) for the latest version
+  agent_timeout     minutes a novelty/research run may take (default 30; 0 = no limit)
 """
 import json
 import os
@@ -36,6 +37,7 @@ ENV_MAP = {
     "cli_model": ("LITSURVEY_CLI_MODEL",),
     "cli_effort": ("LITSURVEY_CLI_EFFORT",),
     "update_check": ("LITSURVEY_UPDATE_CHECK",),
+    "agent_timeout": ("LITSURVEY_AGENT_TIMEOUT",),
 }
 
 DEFAULTS = {
@@ -52,6 +54,7 @@ DEFAULTS = {
     "cli_model": "",
     "cli_effort": "",
     "update_check": "",
+    "agent_timeout": "",
 }
 
 

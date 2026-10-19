@@ -35,8 +35,8 @@ litsurvey cites   <id> [-n 20]  # forward snowball: who cites it
 litsurvey refs    <id> [-n 20]  # backward snowball: what it cites
 litsurvey related <id> [-n 20]  # similar papers via recommender (different vocabulary)
 litsurvey oa      <doi>         # legal open-access PDF via Unpaywall
-litsurvey novelty  "claim as generic topic" [--rounds 8]  [--out report.md]   # LLM agent, minutes
-litsurvey research "question"               [--rounds 12] [--out survey.md]   # LLM agent, minutes
+litsurvey novelty  "claim as generic topic" [--rounds 8]  [--timeout MIN] [--out report.md]   # LLM agent, minutes
+litsurvey research "question"               [--rounds 12] [--timeout MIN] [--out survey.md]   # LLM agent, minutes
 litsurvey history [show <id> | export <id> --out x.bib | delete <id>]
 litsurvey doctor                # run this first if anything fails
 ```
@@ -54,7 +54,10 @@ litsurvey doctor                # run this first if anything fails
   API key; `litsurvey doctor` says which) and take minutes; run them in the
   background. Use them when the user asks for them, or for confidential
   material when the backend is local; otherwise drive
-  `search`/`cites`/`related` yourself and synthesise.
+  `search`/`cites`/`related` yourself and synthesise. They stop at a time
+  limit (30 minutes unless configured; `litsurvey doctor` shows it). For a
+  broad question pass `--timeout 60`, or `--timeout 0` for no limit; do not
+  edit the installed package to change it.
 - To read a paper: `oa <doi>` for a PDF link, or fetch
   `https://arxiv.org/html/<arxiv id>` for arXiv full text.
 - Semantic Scholar is limited to 1 request/second; do not run litsurvey

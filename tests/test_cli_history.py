@@ -148,3 +148,22 @@ def test_related_and_paper_fall_back_to_openalex(monkeypatch):
     assert ops.paper_record("DOI:10.1234/x", notes.append)["title"] == "record via openalex"
     with pytest.raises(RuntimeError, match="no DOI"):
         ops.related_papers("abc123", 5, "relevance", notes.append)
+
+
+def test_doctor_names_an_invalid_time_limit(monkeypatch, capsys):
+    from litsurvey import cli, backends
+    import pytest
+    from litsurvey.sources import arxiv, crossref, iacr, openalex, pubmed, semanticscholar
+    for mod in (arxiv, iacr, openalex, pubmed, semanticscholar):
+        monkeypatch.setattr(mod, "search", lambda *a, **k: [])
+    monkeypatch.setattr(crossref, "portal", lambda name: (lambda *a, **k: []))
+    monkeypatch.setattr(backends, "ollama_models", lambda *a, **k: [])
+    monkeypatch.setattr(backends, "resolve", lambda *a, **k: ("ollama", "m"))
+    monkeypatch.setenv("LITSURVEY_AGENT_TIMEOUT", "ten")
+    monkeypatch.setattr(cli.config, "load", lambda: dict(cli.config.CFG, agent_timeout="ten"))
+    monkeypatch.setitem(backends.CFG, "agent_timeout", "ten")
+    with pytest.raises(SystemExit) as e:
+        cli.main(["doctor"])
+    out = capsys.readouterr().out
+    assert e.value.code == 1 and "time limit   : INVALID" in out
+    assert "A setting is invalid" in out and "core source failed" not in out
